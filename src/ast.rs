@@ -1,4 +1,4 @@
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Op {
     Add,
     Sub,
@@ -12,7 +12,7 @@ pub enum Op {
     Lte,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     IntLit(i64),
     BoolLit(bool),

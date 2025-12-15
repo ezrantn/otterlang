@@ -18,7 +18,7 @@ pub Expr: Expr = {
 };
 
 // Tier 2: Arithmetic (+, -)
-Term: Expr = {
+pub Term: Expr = {
     <l:Term> "+" <r:Factor> => Expr::Binary(Box::new(l), Op::Add, Box::new(r)),
     <l:Term> "-" <r:Factor> => Expr::Binary(Box::new(l), Op::Sub, Box::new(r)),
     <l:Term> "*" <r:Factor> => Expr::Binary(Box::new(l), Op::Mul, Box::new(r)),
@@ -27,7 +27,7 @@ Term: Expr = {
 };
 
 // Tier 3: Highest precedence (Atoms)
-Factor: Expr = {
+pub Factor: Expr = {
     <i:Int> => Expr::IntLit(i),
     <id:Ident> => Expr::Var(id),
     "-" <f:Factor> => Expr::Binary(Box::new(Expr::IntLit(0)), Op::Sub, Box::new(f)),
