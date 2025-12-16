@@ -72,7 +72,8 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::ast::{Expr, Op, Stmt};
+    use super::ast::{Expr, FnDecl, Op, Stmt};
+    use super::check::BorrowChecker;
     use super::otter;
 
     fn int(i: i64) -> Box<Expr> {
@@ -192,5 +193,152 @@ mod tests {
         assert_eq!(func.requires.len(), 2); // Two requires statements
         assert_eq!(func.body.len(), 2); // Two assignments
         assert_eq!(func.ensures.len(), 1); // One ensures statement
+    }
+
+    #[test]
+    fn test_vacuous_truth() {
+        // func Vacuous(x) {
+        //     requires x > 10
+        //     requires x < 5  <-- Impossible!
+        //     x = 99999
+        //     ensures x == 0  <-- Should pass because premises are false
+        // }
+        let func = FnDecl {
+            name: "Vacuous".to_string(),
+            params: vec!["x".to_string()],
+            requires: vec![
+                bin(var("x"), Op::Gt, int(10)),
+                bin(var("x"), Op::Lt, int(5)),
+            ],
+            body: vec![Stmt::Assign {
+                target: "x".to_string(),
+                value: Expr::IntLit(99999),
+            }],
+            ensures: vec![bin(var("x"), Op::Eq, int(0))],
+        };
+
+        // This must PASS Z3
+        let smt = crate::vc::compile(&func);
+        let result = crate::runner::verify_with_z3(&smt);
+        assert!(
+            result.is_ok(),
+            "Vacuous truth failed: Impossible preconditions should verify anything."
+        );
+    }
+
+    #[test]
+    fn test_uninitialized_merge_scope() {
+        // func BrokenScope(c) {
+        //     if c > 0 {
+        //         y = 50
+        //     } else {
+        //         // y NOT defined
+        //     }
+        //     z = y + 1 <-- ERROR: y is undefined
+        // }
+        let func = FnDecl {
+            name: "BrokenScope".to_string(),
+            params: vec!["c".to_string()],
+            requires: vec![],
+            ensures: vec![],
+            body: vec![
+                Stmt::If {
+                    cond: bin(var("c"), Op::Gt, int(0)),
+                    then_block: vec![Stmt::Assign {
+                        target: "y".to_string(),
+                        value: Expr::IntLit(50),
+                    }],
+                    else_block: vec![
+                        // Empty else
+                    ],
+                },
+                Stmt::Assign {
+                    target: "z".to_string(),
+                    value: bin(var("y"), Op::Add, int(1)),
+                },
+            ],
+        };
+
+        // This must FAIL the BORROW CHECKER (not Z3)
+        let mut checker = BorrowChecker::new();
+        let result = checker.check_fn(&func);
+
+        assert!(
+            result.is_err(),
+            "Borrow checker failed to catch uninitialized merge."
+        );
+        assert!(result.unwrap_err().contains("Borrow Error"));
+    }
+
+    #[test]
+    fn test_nested_ssa_logic() {
+        // func Nested(x) {
+        //    if true {
+        //       if true { x = 1 } else { x = 2 }
+        //    } else {
+        //       x = 3
+        //    }
+        //    ensures x == 1
+        // }
+        let func = FnDecl {
+            name: "Nested".to_string(),
+            params: vec!["x".to_string()],
+            requires: vec![],
+            body: vec![Stmt::If {
+                cond: Expr::BoolLit(true),
+                then_block: vec![Stmt::If {
+                    cond: Expr::BoolLit(true),
+                    then_block: vec![Stmt::Assign {
+                        target: "x".to_string(),
+                        value: Expr::IntLit(1),
+                    }],
+                    else_block: vec![Stmt::Assign {
+                        target: "x".to_string(),
+                        value: Expr::IntLit(2),
+                    }],
+                }],
+                else_block: vec![Stmt::Assign {
+                    target: "x".to_string(),
+                    value: Expr::IntLit(3),
+                }],
+            }],
+            ensures: vec![bin(var("x"), Op::Eq, int(1))],
+        };
+
+        let smt = crate::vc::compile(&func);
+        let result = crate::runner::verify_with_z3(&smt);
+        assert!(result.is_ok(), "Nested IF logic failed verification.");
+    }
+
+    #[test]
+    fn test_integer_division_math() {
+        // func Math(x) {
+        //    requires x > 0
+        //    y = x * x
+        //    z = y / x
+        //    ensures z == x
+        // }
+        // Note: In SMT-LIB (div x y) is Euclidean division.
+        // For positive numbers, this identity should hold.
+        let func = FnDecl {
+            name: "Math".to_string(),
+            params: vec!["x".to_string()],
+            requires: vec![bin(var("x"), Op::Gt, int(0))],
+            body: vec![
+                Stmt::Assign {
+                    target: "y".to_string(),
+                    value: bin(var("x"), Op::Mul, var("x")),
+                },
+                Stmt::Assign {
+                    target: "z".to_string(),
+                    value: bin(var("y"), Op::Div, var("x")),
+                },
+            ],
+            ensures: vec![bin(var("z"), Op::Eq, var("x"))],
+        };
+
+        let smt = crate::vc::compile(&func);
+        let result = crate::runner::verify_with_z3(&smt);
+        assert!(result.is_ok(), "Integer division logic failed.");
     }
 }

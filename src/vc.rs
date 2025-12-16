@@ -53,8 +53,8 @@ fn expr_to_smt(expr: &Expr, env: &Env) -> String {
                 Op::Gte => ">=",
                 Op::Lte => "<=",
                 Op::Mul => "*",
-                Op::Neq => "!=",
-                Op::Div => "/",
+                Op::Neq => "distinct",
+                Op::Div => "div",
             };
             format!("({} {} {})", op_str, l, r)
         }
@@ -194,12 +194,13 @@ fn process_block(stmts: &[Stmt], env: &mut Env, smt: &mut String) {
 }
 
 pub fn compile(func: &FnDecl) -> String {
-    let mut smt = String::from("(set-logic QF_LIA)\n");
+    let mut smt = String::from("(set-logic QF_NIA)\n");
     let mut env = Env::new();
 
     // Inputs (Version 0)
     for param in &func.params {
         smt.push_str(&format!("(declare-const {}_0 Int)\n", param));
+        env.current_scope.insert(param.clone(), 0);
     }
 
     // Preconditions
