@@ -26,16 +26,12 @@ pub fn verify_with_z3(smt_code: &str) -> Result<(), String> {
     // but standard Z3 output is clean.
 
     // Simple check: splitting by whitespace
-    let last = stdout
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .next_back()
-        .ok_or("Z3 produced no output")?;
+    let last = stdout.lines().map(str::trim).rfind(|l| !l.is_empty());
 
     match last {
-        "unsat" => Ok(()),
-        "sat" => Err("Counter-example found".to_string()),
-        other => Err(format!("Unexpected Z3 result: {}", other)),
+        Some("unsat") => Ok(()),
+        Some("sat") => Err("Counter-example found".to_string()),
+        Some(other) => Err(format!("Unexpected Z3 result: {}", other)),
+        None => Err("Error".to_string()),
     }
 }
