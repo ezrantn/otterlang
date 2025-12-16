@@ -1,15 +1,15 @@
 use crate::ast::{Expr, FnDecl, Op, Stmt};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 struct Env {
-    global_gen: HashMap<String, usize>,
+    global_gen: BTreeMap<String, usize>,
     current_scope: BTreeMap<String, usize>,
 }
 
 impl Env {
     fn new() -> Self {
         Self {
-            global_gen: HashMap::new(),
+            global_gen: BTreeMap::new(),
             current_scope: BTreeMap::new(),
         }
     }
