@@ -1,7 +1,16 @@
 use std::str::FromStr;
-use crate::ast::{Expr, FnDecl, Op, Stmt};
+use crate::ast::{Expr, FnDecl, Op, Stmt, Type};
 
 grammar;
+
+// ===========================================
+// 0. Types
+// ===========================================
+
+pub Type: Type = {
+    "int" => Type::Int,
+    "nat" => Type::Nat,
+};
 
 // ===========================================
 // 1. Expressions (Pratt Logic / Precedence)
@@ -34,6 +43,7 @@ pub Product: Expr = {
 pub Factor: Expr = {
     <i:Int> => Expr::IntLit(i),
     <id:Ident> => Expr::Var(id),
+    <t:Type> "(" <e:Expr> ")" => Expr::Cast(t, Box::new(e)),
     "-" <f:Factor> => Expr::Binary(Box::new(Expr::IntLit(0)), Op::Sub, Box::new(f)),
     "old" "(" <id:Ident> ")" => Expr::Old(id),
     "(" <e:Expr> ")" => e,
@@ -70,9 +80,13 @@ Block: Vec<Stmt> = {
 Requires: Expr = "requires" <e:Expr> => e;
 Ensures: Expr = "ensures" <e:Expr> => e;
 
+Param: (String, Type) = {
+    <id:Ident> <t:Type> => (id, t)
+};
+
 // Comma separated identifiers: x, y, z
-Params: Vec<String> = {
-    <mut v:(<Ident> ",")*> <e:Ident?> => match e {
+Params: Vec<(String, Type)> = {
+    <mut v:(<Param> ",")*> <e:Param?> => match e {
         None => v,
         Some(e) => {
             v.push(e);

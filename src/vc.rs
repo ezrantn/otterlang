@@ -1,9 +1,10 @@
-use crate::ast::{Expr, FnDecl, Op, Stmt};
+use crate::ast::{Expr, FnDecl, Op, Stmt, Type};
 use std::collections::{BTreeMap, BTreeSet};
 
 struct Env {
     global_gen: BTreeMap<String, usize>,
     current_scope: BTreeMap<String, usize>,
+    var_types: BTreeMap<String, Type>,
 }
 
 impl Env {
@@ -11,7 +12,18 @@ impl Env {
         Self {
             global_gen: BTreeMap::new(),
             current_scope: BTreeMap::new(),
+            var_types: BTreeMap::new(),
         }
+    }
+
+    // Register a variable's type (called during declaration/params)
+    fn register_var(&mut self, name: &str, ty: Type) {
+        self.var_types.insert(name.to_string(), ty);
+    }
+
+    // Check if a variable is a Nat
+    fn is_nat(&self, name: &str) -> bool {
+        matches!(self.var_types.get(name), Some(Type::Nat))
     }
 
     // Get current SSA name (e.g., "x_2")
@@ -41,6 +53,7 @@ fn expr_to_smt(expr: &Expr, env: &Env) -> String {
         Expr::BoolLit(b) => b.to_string(),
         Expr::Var(name) => env.get(name),
         Expr::Old(name) => env.get_old(name),
+        Expr::Cast(_, inner) => expr_to_smt(inner, env), // The safety check happens at the assignment level
         Expr::Binary(lhs, op, rhs) => {
             let l = expr_to_smt(lhs, env);
             let r = expr_to_smt(rhs, env);
@@ -90,9 +103,26 @@ fn process_block(stmts: &[Stmt], env: &mut Env, smt: &mut String) {
         match stmt {
             Stmt::Assign { target, value } => {
                 let val_smt = expr_to_smt(value, env);
+
+                // If target is Nat, we MUST prove value >= 0 before proceeding
+                if env.is_nat(target) {
+                    smt.push_str(&format!("; SAFETY CHECK: {} must be Nat\n", target));
+                    smt.push_str("(push)\n");
+                    // We assert the negation: "Is it possible for val to be < 0?"
+                    smt.push_str(&format!("(assert (< {} 0))\n", val_smt));
+                    smt.push_str("(check-sat)\n");
+                    // If SAT -> Verification Error: "Assignment violates nat type"
+                    smt.push_str("(pop)\n");
+                }
+
                 let new_target = env.new_version(target);
                 smt.push_str(&format!("(declare-const {} Int)\n", new_target));
                 smt.push_str(&format!("(assert (= {} {}))\n", new_target, val_smt));
+
+                // Add the type constraint to the main path too, so future logic knows it's positive
+                if env.is_nat(target) {
+                    smt.push_str(&format!("(assert (>= {} 0))\n", new_target));
+                }
             }
             Stmt::If {
                 cond,
@@ -174,6 +204,7 @@ fn process_block(stmts: &[Stmt], env: &mut Env, smt: &mut String) {
                 let mut body_env = Env {
                     global_gen: env.global_gen.clone(),
                     current_scope: env.current_scope.clone(),
+                    var_types: env.var_types.clone(),
                 };
 
                 process_block(body, &mut body_env, smt);
@@ -196,10 +227,17 @@ pub fn compile(func: &FnDecl) -> String {
     let mut smt = String::from("(set-logic QF_NIA)\n");
     let mut env = Env::new();
 
-    // Inputs (Version 0)
-    for param in &func.params {
-        smt.push_str(&format!("(declare-const {}_0 Int)\n", param));
-        env.current_scope.insert(param.clone(), 0);
+    for (name, ty) in &func.params {
+        // destructure (name, type)
+        env.register_var(name, ty.clone()); // Register type
+
+        smt.push_str(&format!("(declare-const {}_0 Int)\n", name));
+        env.current_scope.insert(name.clone(), 0);
+
+        // [Strictness] If input is Nat, assert it is >= 0
+        if let Type::Nat = ty {
+            smt.push_str(&format!("(assert (>= {}_0 0))\n", name));
+        }
     }
 
     // Preconditions
@@ -216,16 +254,23 @@ pub fn compile(func: &FnDecl) -> String {
         )
     };
 
+    smt.push_str(&format!("(assert {})\n", requires));
+
     // Body
     process_block(&func.body, &mut env, &mut smt);
 
     // Postconditions
+    // We check: implies(BodyLogic, Ensures)
+    // By checking SAT of: BodyLogic AND (NOT Ensures)
     for ens in &func.ensures {
         let post = expr_to_smt(ens, &env);
-        smt.push_str(&format!("(assert (and {} (not {})))\n", requires, post));
+        smt.push_str("; CHECK POSTCONDITION\n");
+        smt.push_str("(push)\n");
+        smt.push_str(&format!("(assert (not {}))\n", post));
+        smt.push_str("(check-sat)\n");
+        smt.push_str("(pop)\n");
     }
 
-    smt.push_str("(check-sat)\n");
     smt
 }
 
@@ -262,7 +307,7 @@ mod tests {
 
         let func = FnDecl {
             name: "abs".to_string(),
-            params: vec!["x".to_string()], // x_0 declared automatically
+            params: vec![("x".to_string(), Type::Int)], // x_0 declared automatically
             requires: vec![],
             body: vec![
                 // 1. Init y = x
@@ -342,7 +387,7 @@ mod tests {
 
         let func = FnDecl {
             name: "buggy_loop".to_string(),
-            params: vec!["n".to_string()],
+            params: vec![("n".to_string(), Type::Int)],
             requires: vec![bin(var("n"), Op::Gt, int(0))],
             body: vec![
                 Stmt::Assign {

@@ -73,7 +73,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::ast::{Expr, FnDecl, Op, Stmt};
+    use super::ast::{Expr, FnDecl, Op, Stmt, Type};
     use super::check::BorrowChecker;
     use super::katon;
     use super::runner;
@@ -178,7 +178,7 @@ mod tests {
         let parser = katon::FnDeclParser::new();
 
         let code = r#"
-            func transfer(from, to, amount) {
+            func transfer(from int, to int, amount int) {
                 requires amount > 0
                 requires from > amount
                 
@@ -192,7 +192,14 @@ mod tests {
         let func = parser.parse(code).unwrap();
 
         assert_eq!(func.name, "transfer");
-        assert_eq!(func.params, vec!["from", "to", "amount"]);
+        assert_eq!(
+            func.params,
+            vec![
+                ("from".to_string(), Type::Int),
+                ("to".to_string(), Type::Int),
+                ("amount".to_string(), Type::Int),
+            ]
+        );
         assert_eq!(func.requires.len(), 2); // Two requires statements
         assert_eq!(func.body.len(), 2); // Two assignments
         assert_eq!(func.ensures.len(), 1); // One ensures statement
@@ -200,15 +207,16 @@ mod tests {
 
     #[test]
     fn test_vacuous_truth() {
-        // func Vacuous(x) {
+        // func Vacuous(x nat) {
         //     requires x > 10
         //     requires x < 5  <-- Impossible!
         //     x = 99999
         //     ensures x == 0  <-- Should pass because premises are false
         // }
+
         let func = FnDecl {
             name: "Vacuous".to_string(),
-            params: vec!["x".to_string()],
+            params: vec![("x".to_string(), Type::Nat)],
             requires: vec![
                 bin(var("x"), Op::Gt, int(10)),
                 bin(var("x"), Op::Lt, int(5)),
@@ -231,17 +239,19 @@ mod tests {
 
     #[test]
     fn test_uninitialized_merge_scope() {
-        // func BrokenScope(c) {
+        // func BrokenScope(c int) {
         //     if c > 0 {
         //         y = 50
         //     } else {
         //         // y NOT defined
         //     }
+        //
         //     z = y + 1 <-- ERROR: y is undefined
         // }
+
         let func = FnDecl {
             name: "BrokenScope".to_string(),
-            params: vec!["c".to_string()],
+            params: vec![("c".to_string(), Type::Int)],
             requires: vec![],
             ensures: vec![],
             body: vec![
@@ -270,12 +280,12 @@ mod tests {
             result.is_err(),
             "Borrow checker failed to catch uninitialized merge."
         );
-        assert!(result.unwrap_err().contains("Borrow Error"));
+        assert!(result.unwrap_err().contains("Borrow Error:"));
     }
 
     #[test]
     fn test_nested_ssa_logic() {
-        // func Nested(x) {
+        // func Nested(x int) {
         //    if true {
         //       if true { x = 1 } else { x = 2 }
         //    } else {
@@ -283,9 +293,10 @@ mod tests {
         //    }
         //    ensures x == 1
         // }
+
         let func = FnDecl {
             name: "Nested".to_string(),
-            params: vec!["x".to_string()],
+            params: vec![("x".to_string(), Type::Int)],
             requires: vec![],
             body: vec![Stmt::If {
                 cond: Expr::BoolLit(true),
@@ -315,7 +326,7 @@ mod tests {
 
     #[test]
     fn test_integer_division_math() {
-        // func Math(x) {
+        // func Math(x int) {
         //    requires x > 0
         //    y = x * x
         //    z = y / x
@@ -323,9 +334,10 @@ mod tests {
         // }
         // Note: In SMT-LIB (div x y) is Euclidean division.
         // For positive numbers, this identity should hold.
+
         let func = FnDecl {
             name: "Math".to_string(),
-            params: vec!["x".to_string()],
+            params: vec![("x".to_string(), Type::Int)],
             requires: vec![bin(var("x"), Op::Gt, int(0))],
             body: vec![
                 Stmt::Assign {
@@ -347,7 +359,7 @@ mod tests {
 
     #[test]
     fn test_bad_loop_entry() {
-        // func BadLoop(x) {
+        // func BadLoop(x int) {
         //    x = 0
         //    // Invariant: x > 10.
         //    // This fails immediately on entry because x is 0!
@@ -355,9 +367,10 @@ mod tests {
         //       x = x + 1
         //    }
         // }
+
         let func = FnDecl {
             name: "BadLoop".to_string(),
-            params: vec!["x".to_string()],
+            params: vec![("x".to_string(), Type::Int)],
             requires: vec![],
             ensures: vec![],
             body: vec![

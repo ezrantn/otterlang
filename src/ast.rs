@@ -19,6 +19,7 @@ pub enum Expr {
     Var(String),
     Old(String), // The "old(x)" operator
     Binary(Box<Expr>, Op, Box<Expr>),
+    Cast(Type, Box<Expr>),
 }
 
 #[derive(Debug, Clone)]
@@ -39,9 +40,15 @@ pub enum Stmt {
     },
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum Type {
+    Int,
+    Nat,
+}
+
 pub struct FnDecl {
     pub name: String,
-    pub params: Vec<String>,
+    pub params: Vec<(String, Type)>,
     pub requires: Vec<Expr>,
     pub ensures: Vec<Expr>,
     pub body: Vec<Stmt>,
