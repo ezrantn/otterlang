@@ -3,6 +3,7 @@ pub mod check;
 pub mod codegen;
 pub mod errors;
 pub mod runner;
+pub mod symbol;
 pub mod vc;
 
 use lalrpop_util::lalrpop_mod;
@@ -12,16 +13,16 @@ lalrpop_mod!(pub katon);
 fn main() {
     // SOURCE CODE (Hardcoded for now, or read from args later)
     let src = r#"
-        func Abs(x) {
-            requires x > -100
+        func Abs(x int) {
+            requires x > -100;
             
             if x < 0 { 
-                x = 0 - x 
+                x = 0 - x;
             } else { 
-                x = x 
+                x = x;
             }
 
-            ensures x >= 0
+            ensures x >= 0;
         }
     "#;
 
@@ -32,20 +33,30 @@ fn main() {
     let parse_result = parser.parse(src);
 
     match parse_result {
-        Ok(func_decl) => {
+        Ok(mut func_decl) => {
             println!("> Parsing: ✅");
+            let mut tcx = symbol::TyCtx::new();
+            let mut resolver = symbol::Resolver::new();
 
-            // BORROW CHECK
+            if let Err(diag) = resolver.resolve_function(&mut func_decl, &mut tcx) {
+                println!("❌ Name Resolution Failed:\n{}", diag);
+                // If you implemented the .emit(src) method: diag.emit(src);
+                std::process::exit(1);
+            }
+            println!("✅ Name Resolution: Success");
+
             let mut checker = check::BorrowChecker::new();
-            match checker.check_fn(&func_decl) {
+            // Borrow checker now needs a reference to tcx for ID-to-Name lookups
+            match checker.check_fn(&func_decl, &tcx) {
                 Ok(_) => {
-                    println!("> Borrow Checker: ✅");
+                    println!("✅ Borrow Checker: Success");
 
-                    // COMPILE TO SMT (VC GENERATION)
-                    let z3_code = vc::compile(&func_decl);
+                    // 4. COMPILE TO SMT (VC GENERATION)
+                    // Robust compile now requires func AND tcx
+                    let z3_code = vc::compile(&func_decl, &tcx);
 
-                    // RUN VERIFIER
-                    println!("> Verifying Logic with Z3...");
+                    // 5. RUN VERIFIER
+                    println!("🔎 Verifying logic with Z3...");
                     match runner::verify_with_z3(&z3_code) {
                         Ok(_) => {
                             println!("\n✨ SUCCESS: Program verified successfully.");
@@ -57,15 +68,13 @@ fn main() {
                         }
                     }
                 }
-
-                Err(e) => {
-                    println!("❌ Borrow Check Failed: {}", e);
+                Err(diag) => {
+                    println!("❌ Borrow Check Failed:\n{}", diag);
                     std::process::exit(1);
                 }
             }
         }
         Err(e) => {
-            // Error handling for parser (same as before)
             println!("❌ Parse Error: {:?}", e);
             std::process::exit(1);
         }
@@ -74,6 +83,9 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+    use crate::ast::NodeId;
+    use crate::symbol::TyCtx;
+
     use super::ast::{Expr, FnDecl, Op, SExpr, Stmt, Type};
     use super::check::BorrowChecker;
     use super::errors::{CheckError, Span, Spanned};
@@ -81,12 +93,12 @@ mod tests {
     use super::runner;
     use super::vc;
 
-    fn var(name: &str) -> SExpr {
-        Spanned::dummy(Expr::Var(name.to_string()))
+    fn var(name: &str, id: u32) -> SExpr {
+        Spanned::dummy(Expr::Var(name.to_string(), Some(NodeId(id))))
     }
 
-    fn old(name: &str) -> SExpr {
-        Spanned::dummy(Expr::Old(name.to_string()))
+    fn old(name: &str, id: u32) -> SExpr {
+        Spanned::dummy(Expr::Old(name.to_string(), Some(NodeId(id))))
     }
 
     fn int(n: i64) -> SExpr {
@@ -131,7 +143,7 @@ mod tests {
         // Test 2: "x == 1 + 2"
         let mut res = parser.parse("x == 1 + 2").unwrap();
         remove_spans(&mut res); // <--- Normalize the spans
-        assert_eq!(res, bin(var("x"), Op::Eq, bin(int(1), Op::Add, int(2))));
+        assert_eq!(res, bin(var("x", 0), Op::Eq, bin(int(1), Op::Add, int(2))));
     }
 
     #[test]
@@ -168,7 +180,7 @@ mod tests {
 
         // Compare only the .node
         let old_res = parser.parse("old(balance)").unwrap();
-        assert_eq!(old_res.node, old("balance").node);
+        assert_eq!(old_res.node, old("balance", 0).node);
     }
 
     #[test]
@@ -178,7 +190,11 @@ mod tests {
         // Assignment
         let assign = parser.parse("x = 100").unwrap();
         match assign.node {
-            Stmt::Assign { target, value } => {
+            Stmt::Assign {
+                target,
+                target_id,
+                value,
+            } => {
                 assert_eq!(target, "x");
                 assert_eq!(value.node, int(100).node);
             }
@@ -222,27 +238,22 @@ mod tests {
 
         let code = r#"
             func transfer(from int, to int, amount int) {
-                requires amount > 0
-                requires from > amount
+                requires amount > 0;
+                requires from > amount;
                 
-                from = from - amount
-                to = to + amount
+                from = from - amount;
+                to = to + amount;
 
-                ensures to > old(to)
+                ensures to > old(to);
             }
         "#;
 
         let func = parser.parse(code).unwrap();
 
         assert_eq!(func.name, "transfer");
-        assert_eq!(
-            func.params,
-            vec![
-                ("from".to_string(), Type::Int),
-                ("to".to_string(), Type::Int),
-                ("amount".to_string(), Type::Int),
-            ]
-        );
+
+        let param_types: Vec<Type> = func.params.iter().map(|(_, ty)| ty.clone()).collect();
+        assert_eq!(param_types, vec![Type::Int, Type::Int, Type::Int]);
         assert_eq!(func.requires.len(), 2); // Two requires statements
         assert_eq!(func.body.len(), 2); // Two assignments
         assert_eq!(func.ensures.len(), 1); // One ensures statement
@@ -257,22 +268,29 @@ mod tests {
         //     ensures x == 0  <-- Should pass because premises are false
         // }
 
+        let mut tcx = TyCtx::new();
+
+        let x_id = NodeId(0);
+        tcx.define_local(x_id, "x", Type::Nat);
+
         let func = FnDecl {
             name: "Vacuous".to_string(),
-            params: vec![("x".to_string(), Type::Nat)],
+            param_names: vec!["x".to_string()],
+            params: vec![(x_id, Type::Nat)],
             requires: vec![
-                bin(var("x"), Op::Gt, int(10)),
-                bin(var("x"), Op::Lt, int(5)),
+                bin(var("x", 0), Op::Gt, int(10)),
+                bin(var("x", 0), Op::Lt, int(5)),
             ],
             body: vec![Spanned::dummy(Stmt::Assign {
                 target: "x".to_string(),
+                target_id: Some(NodeId(1)),
                 value: int(99999),
             })],
-            ensures: vec![bin(var("x"), Op::Eq, int(0))],
+            ensures: vec![bin(var("x", 0), Op::Eq, int(0))],
         };
 
         // This must PASS Z3
-        let smt = vc::compile(&func);
+        let smt = vc::compile(&func, &tcx);
         let result = runner::verify_with_z3(&smt);
         assert!(
             result.is_ok(),
@@ -292,16 +310,23 @@ mod tests {
         //     z = y + 1 <-- ERROR: y is undefined
         // }
 
+        let mut tcx = TyCtx::new();
+
+        let c_id = NodeId(0);
+        tcx.define_local(c_id, "c", Type::Int);
+
         let func = FnDecl {
             name: "BrokenScope".to_string(),
-            params: vec![("c".to_string(), Type::Int)],
+            params: vec![(c_id, Type::Int)],
+            param_names: vec!["c".to_string()],
             requires: vec![],
             ensures: vec![],
             body: vec![
                 Spanned::dummy(Stmt::If {
-                    cond: bin(var("c"), Op::Gt, int(0)),
+                    cond: bin(var("c", 0), Op::Gt, int(0)),
                     then_block: vec![Spanned::dummy(Stmt::Assign {
                         target: "y".to_string(),
+                        target_id: Some(NodeId(1)),
                         value: int(50),
                     })],
                     else_block: vec![
@@ -310,14 +335,15 @@ mod tests {
                 }),
                 Spanned::dummy(Stmt::Assign {
                     target: "z".to_string(),
-                    value: bin(var("y"), Op::Add, int(1)),
+                    target_id: Some(NodeId(2)),
+                    value: bin(var("y", 0), Op::Add, int(1)),
                 }),
             ],
         };
 
         // This must FAIL the BORROW CHECKER (not Z3)
         let mut checker = BorrowChecker::new();
-        let result = checker.check_fn(&func);
+        let result = checker.check_fn(&func, &tcx);
 
         assert!(
             result.is_err(),
@@ -344,9 +370,15 @@ mod tests {
         //    ensures x == 1
         // }
 
+        let mut tcx = TyCtx::new();
+
+        let x_id = NodeId(0);
+        tcx.define_local(x_id, "x", Type::Int);
+
         let func = FnDecl {
             name: "Nested".to_string(),
-            params: vec![("x".to_string(), Type::Int)],
+            param_names: vec!["x".to_string()],
+            params: vec![(x_id, Type::Int)],
             requires: vec![],
             body: vec![Spanned::dummy(Stmt::If {
                 cond: bool_lit(true),
@@ -354,22 +386,25 @@ mod tests {
                     cond: bool_lit(true),
                     then_block: vec![Spanned::dummy(Stmt::Assign {
                         target: "x".to_string(),
+                        target_id: Some(NodeId(0)),
                         value: int(1),
                     })],
                     else_block: vec![Spanned::dummy(Stmt::Assign {
                         target: "x".to_string(),
+                        target_id: Some(NodeId(1)),
                         value: int(2),
                     })],
                 })],
                 else_block: vec![Spanned::dummy(Stmt::Assign {
                     target: "x".to_string(),
+                    target_id: Some(NodeId(2)),
                     value: int(3),
                 })],
             })],
-            ensures: vec![bin(var("x"), Op::Eq, int(1))],
+            ensures: vec![bin(var("x", 0), Op::Eq, int(1))],
         };
 
-        let smt = vc::compile(&func);
+        let smt = vc::compile(&func, &tcx);
         let result = runner::verify_with_z3(&smt);
         assert!(result.is_ok(), "Nested IF logic failed verification.");
     }
@@ -385,24 +420,32 @@ mod tests {
         // Note: In SMT-LIB (div x y) is Euclidean division.
         // For positive numbers, this identity should hold.
 
+        let mut tcx = TyCtx::new();
+
+        let x_id = NodeId(0);
+        tcx.define_local(x_id, "x", Type::Int);
+
         let func = FnDecl {
             name: "Math".to_string(),
-            params: vec![("x".to_string(), Type::Int)],
-            requires: vec![bin(var("x"), Op::Gt, int(0))],
+            param_names: vec!["x".to_string()],
+            params: vec![(x_id, Type::Int)],
+            requires: vec![bin(var("x", 0), Op::Gt, int(0))],
             body: vec![
                 Spanned::dummy(Stmt::Assign {
                     target: "y".to_string(),
-                    value: bin(var("x"), Op::Mul, var("x")),
+                    target_id: Some(NodeId(1)),
+                    value: bin(var("x", 0), Op::Mul, var("x", 0)),
                 }),
                 Spanned::dummy(Stmt::Assign {
                     target: "z".to_string(),
-                    value: bin(var("y"), Op::Div, var("x")),
+                    target_id: Some(NodeId(2)),
+                    value: bin(var("y", 0), Op::Div, var("x", 0)),
                 }),
             ],
-            ensures: vec![bin(var("z"), Op::Eq, var("x"))],
+            ensures: vec![bin(var("z", 0), Op::Eq, var("x", 0))],
         };
 
-        let smt = vc::compile(&func);
+        let smt = vc::compile(&func, &tcx);
         let result = runner::verify_with_z3(&smt);
         assert!(result.is_ok(), "Integer division logic failed.");
     }
@@ -417,29 +460,36 @@ mod tests {
         //       x = x + 1
         //    }
         // }
+        let mut tcx = TyCtx::new();
+
+        let x_id = NodeId(0);
+        tcx.define_local(x_id, "x", Type::Int);
 
         let func = FnDecl {
             name: "BadLoop".to_string(),
-            params: vec![("x".to_string(), Type::Int)],
+            param_names: vec!["x".to_string()],
+            params: vec![(x_id, Type::Int)],
             requires: vec![],
             ensures: vec![],
             body: vec![
                 Spanned::dummy(Stmt::Assign {
                     target: "x".to_string(),
+                    target_id: Some(NodeId(1)),
                     value: int(0),
                 }),
                 Spanned::dummy(Stmt::While {
-                    cond: bin(var("x"), Op::Lt, int(100)),
-                    invariant: bin(var("x"), Op::Gt, int(10)), // 0 > 10 is False
+                    cond: bin(var("x", 0), Op::Lt, int(100)),
+                    invariant: bin(var("x", 0), Op::Gt, int(10)), // 0 > 10 is False
                     body: vec![Spanned::dummy(Stmt::Assign {
                         target: "x".to_string(),
-                        value: bin(var("x"), Op::Add, int(1)),
+                        target_id: Some(NodeId(2)),
+                        value: bin(var("x", 0), Op::Add, int(1)),
                     })],
                 }),
             ],
         };
 
-        let smt = vc::compile(&func);
+        let smt = vc::compile(&func, &tcx);
         let result = runner::verify_with_z3(&smt);
 
         // We EXPECT this to fail.

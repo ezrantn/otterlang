@@ -4,6 +4,10 @@ use std::fmt::{Display, Formatter, Result};
 pub type SExpr = Spanned<Expr>;
 pub type SStmt = Spanned<Stmt>;
 
+// A unique identifier for every definition/use in the program
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct NodeId(pub u32);
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Op {
     Add,
@@ -23,8 +27,8 @@ pub enum Op {
 pub enum Expr {
     IntLit(i64),
     BoolLit(bool),
-    Var(String),
-    Old(String),
+    Var(String, Option<NodeId>), // Var now stores its resolved ID after the name resolution pass
+    Old(String, Option<NodeId>),
     Binary(Box<SExpr>, Op, Box<SExpr>),
     Cast(Type, Box<SExpr>),
 }
@@ -33,6 +37,7 @@ pub enum Expr {
 pub enum Stmt {
     Assign {
         target: String,
+        target_id: Option<NodeId>, // Filled by the resolver
         value: SExpr,
     },
     If {
@@ -47,6 +52,7 @@ pub enum Stmt {
     },
     ArrayUpdate {
         target: String,
+        target_id: Option<NodeId>,
         index: SExpr,
         value: SExpr,
     },
@@ -70,7 +76,8 @@ impl Display for Type {
 }
 pub struct FnDecl {
     pub name: String,
-    pub params: Vec<(String, Type)>,
+    pub params: Vec<(NodeId, Type)>,
+    pub param_names: Vec<String>,
     pub requires: Vec<SExpr>,
     pub ensures: Vec<SExpr>,
     pub body: Vec<SStmt>,

@@ -1,5 +1,5 @@
 use std::str::FromStr;
-use crate::ast::{Expr, FnDecl, Op, Stmt, Type};
+use crate::ast::{Expr, FnDecl, Op, Stmt, Type, NodeId};
 use crate::errors::{Spanned, Span};
 
 grammar;
@@ -58,9 +58,9 @@ pub Factor: Spanned<Expr> = {
 
 pub Atom: Spanned<Expr> = {
     <l:@L> <i:Int> <r:@R> => Spanned::new(Expr::IntLit(i), Span::new(l, r)),
-    <l:@L> <id:Ident> <r:@R> => Spanned::new(Expr::Var(id), Span::new(l, r)),
+    <l:@L> <id:Ident> <r:@R> => Spanned::new(Expr::Var(id, None), Span::new(l, r)),
     <l:@L> <t:Type> "(" <e:Expr> ")" <r:@R> => Spanned::new(Expr::Cast(t, Box::new(e)), Span::new(l, r)),
-    <l:@L> "old" "(" <id:Ident> ")" <r:@R> => Spanned::new(Expr::Old(id), Span::new(l, r)),
+    <l:@L> "old" "(" <id:Ident> ")" <r:@R> => Spanned::new(Expr::Old(id, None), Span::new(l, r)),
     "(" <e:Expr> ")" => e,
 };
 
@@ -69,26 +69,42 @@ pub Atom: Spanned<Expr> = {
 // ===========================================
 
 pub Stmt: Spanned<Stmt> = {
-    <l:@L> <s:StmtKind> <r:@R> => Spanned::new(s, Span::new(l, r))
+    // Add a semicolon here to resolve the Shift/Reduce conflicts
+    <l:@L> <s:StmtKind> ";" <r:@R> => Spanned::new(s, Span::new(l, r)),
+    
+    // Control flow doesn't usually need semicolons after the closing brace
+    <l:@L> <s:ControlFlow> <r:@R> => Spanned::new(s, Span::new(l, r)),
 };
 
 StmtKind: Stmt = {
-    // Assignment: x = 5
-    <id:Ident> "=" <e:Expr> => Stmt::Assign { target: id, value: e },
+    // ONLY define this once. The target_id must be None at parse time.
+    <id:Ident> "=" <e:Expr> => Stmt::Assign { 
+        target: id, 
+        target_id: None, 
+        value: e 
+    },
 
-    // Array Update: id "[" expr "]" = expr
     <id:Ident> "[" <idx:Expr> "]" "=" <val:Expr> => Stmt::ArrayUpdate { 
         target: id, 
+        target_id: None,
         index: idx, 
         value: val 
     },
+};
 
-    // If Statement
+ControlFlow: Stmt = {
     "if" <cond:Expr> <then_block:Block> <else_block:("else" <Block>)?> => {
         Stmt::If {
             cond,
             then_block,
             else_block: else_block.unwrap_or(vec![]),
+        }
+    },
+    "while" <cond:Expr> "invariant" <inv:Expr> <body:Block> => {
+        Stmt::While {
+            cond,
+            invariant: inv,
+            body,
         }
     },
 };
@@ -126,12 +142,20 @@ pub FnDecl: FnDecl = {
         <req:Requires*>   // Vec<Spanned<Expr>>
         <body:Stmt*>      // Vec<Spanned<Stmt>> (Fixed!)
         <ens:Ensures*>    // Vec<Spanned<Expr>>
-    "}" => FnDecl {
-        name,
-        params,
-        requires: req,
-        ensures: ens,
-        body,
+    "}" => {
+        let mut ids = Vec::new();
+        let mut names = Vec::new();
+        for (name, ty) in params {
+            ids.push((NodeId(0), ty)); // Temporary ID
+            names.push(name);          // Actual Name
+        }
+        FnDecl {
+            name,
+            params,
+            requires: req,
+            ensures: ens,
+            body,
+        }
     }
 };
 

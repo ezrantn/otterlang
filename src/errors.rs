@@ -8,6 +8,8 @@ pub enum CheckError {
     TypeMismatch { expected: Type, found: Type },
     InvalidIndex { base_ty: Type },
     UndefinedVariable { var: String },
+    UndefinedArray { var: String },
+    ArrayOutOfBound { var: String },
     AssignToMoved { var: String },
 }
 
@@ -69,6 +71,18 @@ impl<T> Spanned<T> {
     }
 }
 
+impl Diagnostic {
+    pub fn emit(&self, source: &str) {
+        let snippet = &source[self.span.start..self.span.end];
+        println!("--------------------------------------------------");
+        println!("{}", self);
+        println!("   |");
+        println!("   |  {}", snippet);
+        println!("   |");
+        println!("--------------------------------------------------");
+    }
+}
+
 impl fmt::Display for Diagnostic {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.error {
@@ -102,6 +116,12 @@ impl fmt::Display for Diagnostic {
                     "Borrow Error: Cannot assign to moved or uninitialized '{}'\n at {:?}",
                     var, self.span
                 )
+            }
+            CheckError::UndefinedArray { var } => {
+                write!(f, "Array '{}' undefined\n at {:?}", var, self.span)
+            }
+            CheckError::ArrayOutOfBound { var } => {
+                write!(f, "Array '{}' out of bound\n at {:?}", var, self.span)
             }
         }
     }
