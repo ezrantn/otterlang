@@ -53,30 +53,47 @@ impl Env {
     }
 }
 
-fn expr_to_smt(expr: &SExpr, env: &Env, tcx: &TyCtx) -> String {
+fn expr_to_smt(expr: &SExpr, env: &Env, tcx: &TyCtx, smt: &mut String) -> String {
     match &expr.node {
         Expr::IntLit(n) => n.to_string(),
         Expr::BoolLit(b) => b.to_string(),
-        Expr::Var(_name, Some(id)) => env.name(*id, tcx),
+        Expr::Var(name, Some(id)) => {
+            if name.ends_with("_length") {
+                name.clone()
+            } else {
+                env.name(*id, tcx)
+            }
+        }
         Expr::Old(_name, Some(id)) => env.old(*id, tcx),
-        Expr::Cast(_, inner) => expr_to_smt(inner, env, tcx), // The safety check happens at the assignment level
+        Expr::Cast(_, inner) => expr_to_smt(inner, env, tcx, smt), // The safety check happens at the assignment level
         Expr::Binary(lhs, op, rhs) => {
-            let l = expr_to_smt(lhs, env, tcx);
-            let r = expr_to_smt(rhs, env, tcx);
-            let op_str = match op {
-                Op::Add => "+",
-                Op::Sub => "-",
-                Op::Eq => "=",
-                Op::Gt => ">",
-                Op::Lt => "<",
-                Op::Gte => ">=",
-                Op::Lte => "<=",
-                Op::Mul => "*",
-                Op::Neq => "distinct",
-                Op::Div => "div",
-                Op::Index => "select",
-            };
-            format!("({} {} {})", op_str, l, r)
+            let l_smt = expr_to_smt(lhs, env, tcx, smt);
+            let r_smt = expr_to_smt(rhs, env, tcx, smt);
+
+            match op {
+                Op::Index => {
+                    if let Expr::Var(name, _) = &lhs.node {
+                        let len_name = format!("{}_length", name);
+                        smt.push_str("; Safety Check: Array Read\n(push)\n");
+                        smt.push_str(&format!(
+                            "(assert (not (and (>= {0} 0) (< {0} {1}))))\n",
+                            r_smt, len_name
+                        ));
+                        smt.push_str("(check-sat)\n(pop)\n");
+                    }
+                    format!("(select {} {})", l_smt, r_smt)
+                }
+                Op::Sub => format!("(- {} {})", l_smt, r_smt),
+                Op::Lt => format!("(< {} {})", l_smt, r_smt),
+                Op::Gte => format!("(>= {} {})", l_smt, r_smt),
+                Op::Add => format!("(+ {} {})", l_smt, r_smt),
+                Op::And => format!("(and {} {})", l_smt, r_smt),
+                Op::Gt => format!("(> {} {})", l_smt, r_smt),
+                Op::Eq => format!("(= {} {})", l_smt, r_smt),
+                Op::Mul => format!("(* {} {})", l_smt, r_smt),
+                Op::Div => format!("(div {} {})", l_smt, r_smt),
+                _ => unimplemented!("Operator {:?} not implemented in SMT gen", op),
+            }
         }
         _ => unimplemented!(),
     }
@@ -86,6 +103,11 @@ fn get_modified_vars(stmts: &[SStmt]) -> HashSet<NodeId> {
     let mut modified = HashSet::new();
     for stmt in stmts {
         match &stmt.node {
+            Stmt::Let { id, .. } => {
+                if let Some(id) = id {
+                    modified.insert(*id);
+                }
+            }
             Stmt::Assign { target_id, .. } => {
                 if let Some(id) = target_id {
                     modified.insert(*id);
@@ -115,6 +137,7 @@ fn get_modified_vars(stmts: &[SStmt]) -> HashSet<NodeId> {
 fn type_to_smt(ty: &Type) -> String {
     match ty {
         Type::Int | Type::Nat => "Int".to_string(),
+        Type::Bool => "Bool".to_string(),
         Type::Array(inner) => format!("(Array Int {})", type_to_smt(inner)),
     }
 }
@@ -128,24 +151,59 @@ fn process_block(stmts: &[SStmt], env: Env, smt: &mut String, tcx: &TyCtx) -> En
                 target_id, value, ..
             } => {
                 let id = target_id.unwrap();
-                let val = expr_to_smt(value, &env, tcx);
+                let val_smt = expr_to_smt(value, &env, tcx, smt);
+                let ty_obj = env.var_types.get(&id).unwrap();
+
+                // If target is a Nat, the new value must be >= 0
+                if matches!(ty_obj, Type::Nat) {
+                    smt.push_str("; Safety Check: Nat Assignment\n(push)\n");
+                    smt.push_str(&format!("(assert (not (>= {} 0)))\n", val_smt));
+                    smt.push_str("(check-sat)\n(pop)\n");
+                }
 
                 let (env2, ver) = env.assign(id);
                 let name = format!("{}_{}", tcx.get_name(&id), ver);
-                let ty = type_to_smt(env.var_types.get(&id).unwrap());
+                let ty_smt = type_to_smt(ty_obj);
 
-                smt.push_str(&format!("(declare-const {} {})\n", name, ty));
-                smt.push_str(&format!("(assert (= {} {}))\n", name, val));
+                smt.push_str(&format!("(declare-const {} {})\n", name, ty_smt));
+                smt.push_str(&format!("(assert (= {} {}))\n", name, val_smt));
 
                 env = env2;
+            }
+            Stmt::Let { value, id, .. } => {
+                let id = id.unwrap();
+                let val_smt = expr_to_smt(value, &env, tcx, smt);
+                let ty_obj = env.var_types.get(&id).unwrap();
+
+                // Is the initial value valid for a Nat?
+                if matches!(ty_obj, Type::Nat) {
+                    smt.push_str("; Safety Check: Nat Declaration\n(push)\n");
+                    smt.push_str(&format!("(assert (not (>= {} 0)))\n", val_smt));
+                    smt.push_str("(check-sat)\n(pop)\n");
+                }
+
+                let mut gens = env.gens.borrow_mut();
+                let v = gens.entry(id).or_insert(0);
+                *v += 1;
+                let ver = *v;
+                env.versions.insert(id, ver);
+
+                let name = format!("{}_{}", tcx.get_name(&id), ver);
+                smt.push_str(&format!(
+                    "(declare-const {} {})\n",
+                    name,
+                    type_to_smt(ty_obj)
+                ));
+                smt.push_str(&format!("(assert (= {} {}))\n", name, val_smt));
             }
             Stmt::If {
                 cond,
                 then_block,
                 else_block,
             } => {
-                let cond_smt = expr_to_smt(cond, &env, tcx);
+                let cond_smt = expr_to_smt(cond, &env, tcx, smt);
 
+                // Process branches
                 let then_env = process_block(then_block, env.clone(), smt, tcx);
                 let else_env = process_block(else_block, env.clone(), smt, tcx);
 
@@ -163,7 +221,6 @@ fn process_block(stmts: &[SStmt], env: Env, smt: &mut String, tcx: &TyCtx) -> En
                     let v_else = else_env.versions.get(&id).copied().unwrap_or(v_orig);
 
                     if v_then != v_orig || v_else != v_orig {
-                        // Get a truly unique new version for the merged result
                         let (next, v_phi) = merged_env.assign(id);
                         merged_env = next;
 
@@ -183,7 +240,7 @@ fn process_block(stmts: &[SStmt], env: Env, smt: &mut String, tcx: &TyCtx) -> En
                     }
                 }
 
-                return merged_env;
+                env = merged_env;
             }
             Stmt::While {
                 cond,
@@ -193,7 +250,7 @@ fn process_block(stmts: &[SStmt], env: Env, smt: &mut String, tcx: &TyCtx) -> En
                 // Assert Invariant holds on Entry
                 // Does the invariant hold BEFORE the loop starts?
                 // 1. Initial Check
-                let inv_init = expr_to_smt(invariant, &env, tcx);
+                let inv_init = expr_to_smt(invariant, &env, tcx, smt);
                 smt.push_str("; Check: Invariant on Entry\n(push)\n");
                 smt.push_str(&format!(
                     "(assert (not {}))\n(check-sat)\n(pop)\n",
@@ -216,22 +273,22 @@ fn process_block(stmts: &[SStmt], env: Env, smt: &mut String, tcx: &TyCtx) -> En
                 }
 
                 // 3. Assume Invariant and Maintenance
-                let inv_head = expr_to_smt(invariant, &loop_env, tcx);
+                let inv_head = expr_to_smt(invariant, &loop_env, tcx, smt);
                 smt.push_str(&format!("(assert {})\n", inv_head));
 
                 smt.push_str("; Check: Maintenance\n(push)\n");
-                let c_smt = expr_to_smt(cond, &loop_env, tcx);
+                let c_smt = expr_to_smt(cond, &loop_env, tcx, smt);
                 smt.push_str(&format!("(assert {})\n", c_smt));
 
                 let body_env = process_block(body, loop_env.clone(), smt, tcx);
-                let inv_post = expr_to_smt(invariant, &body_env, tcx);
+                let inv_post = expr_to_smt(invariant, &body_env, tcx, smt);
                 smt.push_str(&format!(
                     "(assert (not {}))\n(check-sat)\n(pop)\n",
                     inv_post
                 ));
 
                 // 4. Exit
-                let c_exit = expr_to_smt(cond, &loop_env, tcx);
+                let c_exit = expr_to_smt(cond, &loop_env, tcx, smt);
                 smt.push_str(&format!("(assert (not {}))\n", c_exit));
 
                 env = loop_env;
@@ -244,11 +301,13 @@ fn process_block(stmts: &[SStmt], env: Env, smt: &mut String, tcx: &TyCtx) -> En
             } => {
                 let id = target_id.expect("Missing ID");
                 let old_name = env.name(id, tcx);
-                let idx_smt = expr_to_smt(index, &env, tcx);
-                let val_smt = expr_to_smt(value, &env, tcx);
+                let idx_smt = expr_to_smt(index, &env, tcx, smt);
+                let val_smt = expr_to_smt(value, &env, tcx, smt);
 
                 // Bounds Check
-                let len_name = format!("{}_length", tcx.get_name(&id));
+                let var_base_name = tcx.get_name(&id);
+                let len_name = format!("{}_length", var_base_name); // This refers to the const declared in compile()
+
                 smt.push_str("; Safety Check: Array Bounds\n(push)\n");
                 smt.push_str(&format!(
                     "(assert (not (and (>= {0} 0) (< {0} {1}))))\n",
@@ -278,44 +337,37 @@ pub fn compile(func: &FnDecl, tcx: &TyCtx) -> String {
     let mut smt = String::from("(set-logic QF_AUFNIA)\n");
     let mut env = Env::new();
 
-    // Pass 1: Pre-register all types from Symbol Table
-    let modified = get_modified_vars(&func.body);
-    let all_vars = func.params.iter().map(|(id, _)| *id).chain(modified);
-    for id in all_vars {
-        if let Some(ty) = tcx.get_type(&id) {
-            env.register_var(id, ty.clone());
-        }
+    for (id, ty) in &tcx.node_types {
+        env.register_var(*id, ty.clone());
     }
 
-    // Pass 2: Declare Parameters
-    for (id, ty) in &func.params {
-        let (next_env, ver) = env.assign(*id);
+    // Declare parameters and set initial versions FIRST
+    for (param_id, _) in &func.params {
+        let (next_env, ver) = env.assign(*param_id);
         env = next_env;
 
-        let name = tcx.get_name(id);
-        let ssa_name = format!("{}_{}", name, ver);
-        smt.push_str(&format!(
-            "(declare-const {} {})\n",
-            ssa_name,
-            type_to_smt(ty)
-        ));
+        let var_name = tcx.get_name(param_id);
+        let name = format!("{}_{}", var_name, ver);
+        let ty_obj = env.var_types.get(param_id).unwrap();
+        let ty = type_to_smt(ty_obj);
 
-        if let Type::Nat = ty {
-            smt.push_str(&format!("(assert (>= {} 0))\n", ssa_name));
+        smt.push_str(&format!("(declare-const {} {})\n", name, ty));
+
+        if matches!(ty_obj, Type::Nat) {
+            smt.push_str(&format!("(assert (>= {} 0))\n", name));
         }
-        if let Type::Array(_) = ty {
-            smt.push_str(&format!(
-                "(declare-const {}_length Int)\n(assert (>= {}_length 0))\n",
-                name, name
-            ));
+
+        if let Type::Array(_) = ty_obj {
+            smt.push_str(&format!("(declare-const {}_length Int)\n", var_name));
+            smt.push_str(&format!("(assert (>= {}_length 0))\n", var_name));
         }
     }
 
-    // Preconditions
+    // Preconditions now refer to the correct initial versions (e.g., x_1)
     let reqs = func
         .requires
         .iter()
-        .map(|r| expr_to_smt(r, &env, tcx))
+        .map(|r| expr_to_smt(r, &env, tcx, &mut smt))
         .collect::<Vec<_>>();
     if !reqs.is_empty() {
         smt.push_str(&format!("(assert (and {}))\n", reqs.join(" ")));
@@ -326,7 +378,7 @@ pub fn compile(func: &FnDecl, tcx: &TyCtx) -> String {
 
     // Postconditions
     for ens in &func.ensures {
-        let post = expr_to_smt(ens, &final_env, tcx);
+        let post = expr_to_smt(ens, &final_env, tcx, &mut smt);
         smt.push_str("\n; Check Postcondition\n(push)\n");
         smt.push_str(&format!("(assert (not {}))\n(check-sat)\n(pop)\n", post));
     }

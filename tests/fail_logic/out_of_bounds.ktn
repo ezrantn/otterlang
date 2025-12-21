@@ -1,0 +1,5 @@
+func main(a: [int], i: int) {
+    requires i >= 0;
+    // ERROR: We didn't require i < len(a)
+    a[i] = 10; 
+}

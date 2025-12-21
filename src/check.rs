@@ -25,7 +25,7 @@ impl BorrowChecker {
         }
     }
 
-    pub fn check_fn(&mut self, func: &FnDecl, tcx: &TyCtx) -> Result<(), Diagnostic> {
+    pub fn check_fn(&mut self, func: &FnDecl, tcx: &mut TyCtx) -> Result<(), Diagnostic> {
         // Initialize args as Alive
         // Register variable as Alive with its Type
         for (id, ty) in &func.params {
@@ -42,12 +42,12 @@ impl BorrowChecker {
 
     fn is_copy(&self, ty: &Type) -> bool {
         match ty {
-            Type::Int | Type::Nat => true, // Primitives copy
-            Type::Array(_) => false,       // Array moves
+            Type::Int | Type::Nat | Type::Bool => true, // Primitives copy
+            Type::Array(_) => false,                    // Array moves
         }
     }
 
-    fn check_stmt(&mut self, stmt: &SStmt, tcx: &TyCtx) -> Result<(), Diagnostic> {
+    pub fn check_stmt(&mut self, stmt: &SStmt, tcx: &mut TyCtx) -> Result<(), Diagnostic> {
         match &stmt.node {
             Stmt::Assign {
                 target,
@@ -55,7 +55,7 @@ impl BorrowChecker {
                 value,
             } => {
                 // Check RHS first (Use)
-                self.check_expr(value)?;
+                self.check_expr(value, tcx)?;
 
                 // Revive LHS (Define)
                 // Get the unique ID for this target
@@ -71,12 +71,28 @@ impl BorrowChecker {
                 self.id_to_name.insert(id, target.clone());
                 Ok(())
             }
+            Stmt::Let { name, value, id } => {
+                self.check_expr(value, tcx)?;
+
+                let id = id.expect("Resolver should have assigned ID");
+
+                let ty = tcx
+                    .node_types
+                    .get(&id)
+                    .expect("TypeChecker must run before BorrowChecker")
+                    .clone();
+
+                self.scope.insert(id, (true, ty));
+                self.id_to_name.insert(id, name.clone());
+
+                Ok(())
+            }
             Stmt::If {
                 cond,
                 then_block,
                 else_block,
             } => {
-                self.check_expr(cond)?;
+                self.check_expr(cond, tcx)?;
 
                 let outer_scope = self.scope.clone();
 
@@ -110,8 +126,8 @@ impl BorrowChecker {
                 invariant,
                 body,
             } => {
-                self.check_expr(cond)?;
-                self.check_expr(invariant)?;
+                self.check_expr(cond, tcx)?;
+                self.check_expr(invariant, tcx)?;
 
                 let start_scope = self.scope.clone();
 
@@ -154,10 +170,10 @@ impl BorrowChecker {
                 value,
             } => {
                 //  Check the Index expression (Read)
-                self.check_expr(index)?;
+                self.check_expr(index, tcx)?;
 
-                // 2. Check the Value expression (Read/Move)
-                self.check_expr(value)?;
+                // Check the Value expression (Read/Move)
+                self.check_expr(value, tcx)?;
 
                 let id = target_id.expect("Resolver should have assigned an ID to array target");
 
@@ -196,83 +212,73 @@ impl BorrowChecker {
         }
     }
 
-    fn check_expr(&mut self, expr: &SExpr) -> Result<(), Diagnostic> {
+    fn check_expr(&mut self, expr: &SExpr, _tcx: &TyCtx) -> Result<(), Diagnostic> {
         match &expr.node {
-            Expr::Var(name, node_id) => {
-                let id = node_id.expect("Resolver should have assigned an ID");
+            Expr::Var(name, id) => {
+                let id = id.expect("resolved");
+                let (alive, ty) = self.scope.get(&id).cloned().ok_or(Diagnostic {
+                    error: CheckError::UndefinedVariable { var: name.clone() },
+                    span: expr.span,
+                })?;
 
-                if let Some((is_alive, ty)) = self.scope.get(&id).cloned() {
-                    if !is_alive {
+                if !alive {
+                    return Err(Diagnostic {
+                        error: CheckError::UseAfterMove { var: name.clone() },
+                        span: expr.span,
+                    });
+                }
+
+                if !self.is_copy(&ty) {
+                    self.scope.insert(id, (false, ty));
+                }
+
+                Ok(())
+            }
+
+            Expr::Old(_, id) => {
+                let id = id.expect("resolved");
+                if !self.scope.contains_key(&id) {
+                    return Err(Diagnostic {
+                        error: CheckError::UndefinedVariable { var: "old".into() },
+                        span: expr.span,
+                    });
+                }
+                Ok(())
+            }
+
+            Expr::Binary(l, Op::Index, r) => {
+                // Check the index (usually a copy type like Int/Nat)
+                self.check_expr(r, _tcx)?;
+
+                // Borrow the array (l)
+                // We check if it's alive, but we DO NOT mark it as moved.
+                if let Expr::Var(name, Some(id)) = &l.node {
+                    let (alive, _ty) = self.scope.get(id).cloned().ok_or(Diagnostic {
+                        error: CheckError::UndefinedVariable { var: name.clone() },
+                        span: l.span,
+                    })?;
+
+                    if !alive {
                         return Err(Diagnostic {
                             error: CheckError::UseAfterMove { var: name.clone() },
-                            span: expr.span,
+                            span: l.span,
                         });
                     }
 
-                    // If it's not a Copy type (like an Array), "kill" it (mark as moved)
-                    if !self.is_copy(&ty) {
-                        self.scope.insert(id, (false, ty));
-                    }
-
+                    // Success: It's alive. We leave it as (true, ty) in self.scope.
                     Ok(())
                 } else {
-                    Err(Diagnostic {
-                        error: CheckError::UndefinedVariable { var: name.clone() },
-                        span: expr.span,
-                    })
-                }
-            }
-            Expr::Cast(_, inner) => self.check_expr(inner),
-            Expr::Binary(lhs, Op::Index, rhs) => {
-                // 1. Check the Index (rhs)
-                self.check_expr(rhs)?;
-
-                // 2. Check the Array (lhs) carefully
-                // If lhs is a variable, we peek at it without killing it
-                match &lhs.node {
-                    Expr::Var(name, node_id) => {
-                        let id = node_id.expect("Resolver missing ID for array");
-
-                        match self.scope.get(&id) {
-                            Some((is_alive, _ty)) => {
-                                if !is_alive {
-                                    return Err(Diagnostic {
-                                        error: CheckError::UseAfterMove { var: name.clone() },
-                                        span: lhs.span,
-                                    });
-                                }
-                                // DO NOT kill — indexing is a borrow
-                                Ok(())
-                            }
-                            None => Err(Diagnostic {
-                                error: CheckError::UndefinedVariable { var: name.clone() },
-                                span: lhs.span,
-                            }),
-                        }
-                    }
-                    // If lhs is complex (e.g. arr_factory()[0]), process recursively
-                    _ => self.check_expr(lhs),
+                    // If it's a complex expression like (get_arr())[i],
+                    // we recurse, but usually indexing is on a variable.
+                    self.check_expr(l, _tcx)
                 }
             }
             Expr::Binary(l, _, r) => {
-                // Order matters! Left is evaluated/moved first.
-                self.check_expr(l)?;
-                self.check_expr(r)
+                self.check_expr(l, _tcx)?;
+                self.check_expr(r, _tcx)
             }
-            Expr::Old(name, node_id) => {
-                let id = node_id.expect("Resolver should have assigned an ID to old()");
 
-                // old(x) usually borrows, so we might check existence without killing?
-                // For safety, let's treat it as a read
-                if self.scope.contains_key(&id) {
-                    Ok(())
-                } else {
-                    Err(Diagnostic {
-                        error: CheckError::UndefinedVariable { var: name.clone() },
-                        span: expr.span,
-                    })
-                }
-            }
+            Expr::Cast(_, inner) => self.check_expr(inner, _tcx),
             _ => Ok(()),
         }
     }
@@ -369,7 +375,7 @@ mod tests {
             ],
         };
 
-        let result = bc.check_fn(&func, &tcx);
+        let result = bc.check_fn(&func, &mut tcx);
         assert!(result.is_ok(), "Int should be Copy, so x remains alive");
     }
 
@@ -415,7 +421,7 @@ mod tests {
             ],
         };
 
-        let result = bc.check_fn(&func, &tcx);
+        let result = bc.check_fn(&func, &mut tcx);
 
         // Should pass
         assert!(result.is_ok(), "Int and Nat should be Copy types!")
@@ -466,7 +472,7 @@ mod tests {
             ],
         };
 
-        let result = bc.check_fn(&func, &tcx);
+        let result = bc.check_fn(&func, &mut tcx);
         assert!(result.is_err());
 
         let err = result.unwrap_err();
@@ -536,7 +542,7 @@ mod tests {
             ],
         };
 
-        let result = bc.check_fn(&func, &tcx);
+        let result = bc.check_fn(&func, &mut tcx);
         assert!(result.is_ok())
     }
 
@@ -547,7 +553,7 @@ mod tests {
 
         let mut bc = BorrowChecker::new();
 
-        let tcx = TyCtx {
+        let mut tcx = TyCtx {
             resolutions: HashMap::new(),
             node_types: HashMap::new(),
         };
@@ -565,7 +571,7 @@ mod tests {
             })],
         };
 
-        let result = bc.check_fn(&func, &tcx);
+        let result = bc.check_fn(&func, &mut tcx);
         assert!(result.is_err());
 
         let err_msg = result.unwrap_err().to_string();
@@ -620,7 +626,7 @@ mod tests {
             ],
         };
 
-        let result = bc.check_fn(&func, &tcx);
+        let result = bc.check_fn(&func, &mut tcx);
         assert!(result.is_err());
 
         let err = result.unwrap_err();

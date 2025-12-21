@@ -11,7 +11,7 @@ grammar;
 pub Type: Type = {
     "int" => Type::Int,
     "nat" => Type::Nat,
-    "[" "]" <t:Type> => Type::Array(Box::new(t)),
+    "[" <t:Type> "]" => Type::Array(Box::new(t)),
 };
 
 // ===========================================
@@ -19,48 +19,66 @@ pub Type: Type = {
 // ===========================================
 
 // Tier 1: Lowest precedence (Comparisons)
+
 pub Expr: Spanned<Expr> = {
-    <l:@L> <lhs:Expr> "==" <rhs:Term> <r:@R> => Spanned::new(Expr::Binary(Box::new(lhs), Op::Eq, Box::new(rhs)), Span::new(l, r)),
-    <l:@L> <lhs:Expr> ">"  <rhs:Term> <r:@R> => Spanned::new(Expr::Binary(Box::new(lhs), Op::Gt, Box::new(rhs)), Span::new(l, r)),
-    <l:@L> <lhs:Expr> "<"  <rhs:Term> <r:@R> => Spanned::new(Expr::Binary(Box::new(lhs), Op::Lt, Box::new(rhs)), Span::new(l, r)),
-    <l:@L> <lhs:Expr> ">=" <rhs:Term> <r:@R> => Spanned::new(Expr::Binary(Box::new(lhs), Op::Gte, Box::new(rhs)), Span::new(l, r)),
-    <l:@L> <lhs:Expr> "<=" <rhs:Term> <r:@R> => Spanned::new(Expr::Binary(Box::new(lhs), Op::Lte, Box::new(rhs)), Span::new(l, r)),
-    Term,
+    <l:@L> <lhs:Expr> "&&" <rhs:Compare> <r:@R> =>
+        Spanned::new(Expr::Binary(Box::new(lhs), Op::And, Box::new(rhs)), Span::new(l, r)),
+    Compare,
 };
 
-// Tier 2: Arithmetic (+, -)
-pub Term: Spanned<Expr> = {
-    <l:@L> <lhs:Term> "+" <rhs:Product> <r:@R> => Spanned::new(Expr::Binary(Box::new(lhs), Op::Add, Box::new(rhs)), Span::new(l, r)),
-    <l:@L> <lhs:Term> "-" <rhs:Product> <r:@R> => Spanned::new(Expr::Binary(Box::new(lhs), Op::Sub, Box::new(rhs)), Span::new(l, r)),
-    Product,
+Compare: Spanned<Expr> = {
+    <l:@L> <lhs:Compare> "==" <rhs:Add> <r:@R> =>
+        Spanned::new(Expr::Binary(Box::new(lhs), Op::Eq, Box::new(rhs)), Span::new(l, r)),
+    <l:@L> <lhs:Compare> ">" <rhs:Add> <r:@R> =>
+        Spanned::new(Expr::Binary(Box::new(lhs), Op::Gt, Box::new(rhs)), Span::new(l, r)),
+    <l:@L> <lhs:Compare> "<" <rhs:Add> <r:@R> =>
+        Spanned::new(Expr::Binary(Box::new(lhs), Op::Lt, Box::new(rhs)), Span::new(l, r)),
+    <l:@L> <lhs:Compare> ">=" <rhs:Add> <r:@R> =>
+        Spanned::new(Expr::Binary(Box::new(lhs), Op::Gte, Box::new(rhs)), Span::new(l, r)),
+    <l:@L> <lhs:Compare> "<=" <rhs:Add> <r:@R> =>
+        Spanned::new(Expr::Binary(Box::new(lhs), Op::Lte, Box::new(rhs)), Span::new(l, r)),
+    Add,
 };
 
-pub Product: Spanned<Expr> = {
-    <l:@L> <lhs:Product> "*" <rhs:Unary> <r:@R> => Spanned::new(Expr::Binary(Box::new(lhs), Op::Mul, Box::new(rhs)), Span::new(l, r)),
-    <l:@L> <lhs:Product> "/" <rhs:Unary> <r:@R> => Spanned::new(Expr::Binary(Box::new(lhs), Op::Div, Box::new(rhs)), Span::new(l, r)),
+Add: Spanned<Expr> = {
+    <l:@L> <lhs:Add> "+" <rhs:Mul> <r:@R> =>
+        Spanned::new(Expr::Binary(Box::new(lhs), Op::Add, Box::new(rhs)), Span::new(l, r)),
+    <l:@L> <lhs:Add> "-" <rhs:Mul> <r:@R> =>
+        Spanned::new(Expr::Binary(Box::new(lhs), Op::Sub, Box::new(rhs)), Span::new(l, r)),
+    Mul,
+};
+
+Mul: Spanned<Expr> = {
+    <l:@L> <lhs:Mul> "*" <rhs:Unary> <r:@R> =>
+        Spanned::new(Expr::Binary(Box::new(lhs), Op::Mul, Box::new(rhs)), Span::new(l, r)),
+    <l:@L> <lhs:Mul> "/" <rhs:Unary> <r:@R> =>
+        Spanned::new(Expr::Binary(Box::new(lhs), Op::Div, Box::new(rhs)), Span::new(l, r)),
     Unary,
 };
 
-pub Unary: Spanned<Expr> = {
+Unary: Spanned<Expr> = {
     <l:@L> "-" <u:Unary> <r:@R> => {
-        // Create a dummy 0 for the negation: 0 - u
-        let zero = Spanned::new(Expr::IntLit(0), Span::new(l, l)); 
+        let zero = Spanned::new(Expr::IntLit(0), Span::new(l, l));
         Spanned::new(Expr::Binary(Box::new(zero), Op::Sub, Box::new(u)), Span::new(l, r))
     },
-    Factor,
-}
+    Postfix,
+};
 
-// Tier 3: Highest precedence (Atoms)
-pub Factor: Spanned<Expr> = {
-    <l:@L> <base:Factor> "[" <idx:Expr> "]" <r:@R> => Spanned::new(Expr::Binary(Box::new(base), Op::Index, Box::new(idx)), Span::new(l, r)),
+Postfix: Spanned<Expr> = {
+    <l:@L> <base:Postfix> "[" <idx:Expr> "]" <r:@R> =>
+        Spanned::new(Expr::Binary(Box::new(base), Op::Index, Box::new(idx)), Span::new(l, r)),
     Atom,
 };
 
-pub Atom: Spanned<Expr> = {
-    <l:@L> <i:Int> <r:@R> => Spanned::new(Expr::IntLit(i), Span::new(l, r)),
-    <l:@L> <id:Ident> <r:@R> => Spanned::new(Expr::Var(id, None), Span::new(l, r)),
-    <l:@L> <t:Type> "(" <e:Expr> ")" <r:@R> => Spanned::new(Expr::Cast(t, Box::new(e)), Span::new(l, r)),
-    <l:@L> "old" "(" <id:Ident> ")" <r:@R> => Spanned::new(Expr::Old(id, None), Span::new(l, r)),
+Atom: Spanned<Expr> = {
+    <l:@L> <i:Int> <r:@R> =>
+        Spanned::new(Expr::IntLit(i), Span::new(l, r)),
+    <l:@L> <id:Ident> <r:@R> =>
+        Spanned::new(Expr::Var(id, None), Span::new(l, r)),
+    <l:@L> <t:Type> "(" <e:Expr> ")" <r:@R> =>
+        Spanned::new(Expr::Cast(t, Box::new(e)), Span::new(l, r)),
+    <l:@L> "old" "(" <id:Ident> ")" <r:@R> =>
+        Spanned::new(Expr::Old(id, None), Span::new(l, r)),
     "(" <e:Expr> ")" => e,
 };
 
@@ -77,6 +95,12 @@ pub Stmt: Spanned<Stmt> = {
 };
 
 StmtKind: Stmt = {
+    "let" <id:Ident> "=" <e:Expr> => Stmt::Let {
+        name: id,
+        value: e,
+        id: None,
+    },
+
     // ONLY define this once. The target_id must be None at parse time.
     <id:Ident> "=" <e:Expr> => Stmt::Assign { 
         target: id, 

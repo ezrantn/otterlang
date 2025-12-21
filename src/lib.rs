@@ -4,93 +4,20 @@ pub mod codegen;
 pub mod errors;
 pub mod runner;
 pub mod symbol_table;
+pub mod typecheck;
 pub mod vc;
-
 use lalrpop_util::lalrpop_mod;
 
 lalrpop_mod!(pub katon);
 
-fn main() {
-    // SOURCE CODE (Hardcoded for now, or read from args later)
-    let src = r#"
-        func Abs(x int) {
-            requires x > -100;
-            
-            if x < 0 { 
-                x = 0 - x;
-            } else { 
-                x = x;
-            }
-
-            ensures x >= 0;
-        }
-    "#;
-
-    println!("Compiling katon program...");
-
-    // PARSE
-    let parser = katon::FnDeclParser::new();
-    let parse_result = parser.parse(src);
-
-    match parse_result {
-        Ok(mut func_decl) => {
-            println!("> Parsing: ✅");
-            let mut tcx = symbol_table::TyCtx::new();
-            let mut resolver = symbol_table::Resolver::new();
-
-            if let Err(diag) = resolver.resolve_function(&mut func_decl, &mut tcx) {
-                println!("❌ Name Resolution Failed:\n{}", diag);
-                // If you implemented the .emit(src) method: diag.emit(src);
-                std::process::exit(1);
-            }
-            println!("✅ Name Resolution: Success");
-
-            let mut checker = check::BorrowChecker::new();
-            // Borrow checker now needs a reference to tcx for ID-to-Name lookups
-            match checker.check_fn(&func_decl, &tcx) {
-                Ok(_) => {
-                    println!("✅ Borrow Checker: Success");
-
-                    // 4. COMPILE TO SMT (VC GENERATION)
-                    // Robust compile now requires func AND tcx
-                    let z3_code = vc::compile(&func_decl, &tcx);
-
-                    // 5. RUN VERIFIER
-                    println!("🔎 Verifying logic with Z3...");
-                    match runner::verify_with_z3(&z3_code) {
-                        Ok(_) => {
-                            println!("\n✨ SUCCESS: Program verified successfully.");
-                        }
-                        Err(e) => {
-                            println!("\n❌ VERIFICATION FAILED.");
-                            println!("Reason: {}", e);
-                            std::process::exit(1);
-                        }
-                    }
-                }
-                Err(diag) => {
-                    println!("❌ Borrow Check Failed:\n{}", diag);
-                    std::process::exit(1);
-                }
-            }
-        }
-        Err(e) => {
-            println!("❌ Parse Error: {:?}", e);
-            std::process::exit(1);
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use crate::ast::NodeId;
-    use crate::symbol_table::TyCtx;
-
-    use super::ast::{Expr, FnDecl, Op, SExpr, Stmt, Type};
+    use super::ast::{Expr, FnDecl, NodeId, Op, SExpr, Stmt, Type};
     use super::check::BorrowChecker;
     use super::errors::{CheckError, Span, Spanned};
     use super::katon;
     use super::runner;
+    use super::symbol_table::TyCtx;
     use super::vc;
 
     fn var(name: &str, id: Option<u32>) -> SExpr {
@@ -247,7 +174,12 @@ mod tests {
 
         assert_eq!(func.name, "transfer");
 
-        let param_types: Vec<Type> = func.params.iter().map(|(_, ty)| ty.clone()).collect();
+        let param_types: Vec<Type> = func
+            .params
+            .iter()
+            .map(|(_, ty): &(NodeId, Type)| ty.clone())
+            .collect();
+
         assert_eq!(param_types, vec![Type::Int, Type::Int, Type::Int]);
         assert_eq!(func.requires.len(), 2); // Two requires statements
         assert_eq!(func.body.len(), 2); // Two assignments
@@ -338,7 +270,7 @@ mod tests {
 
         // This must FAIL the BORROW CHECKER (not Z3)
         let mut checker = BorrowChecker::new();
-        let result = checker.check_fn(&func, &tcx);
+        let result = checker.check_fn(&func, &mut tcx);
 
         assert!(
             result.is_err(),
@@ -446,6 +378,8 @@ mod tests {
         };
 
         let smt = vc::compile(&func, &tcx);
+
+        println!("{}", smt);
         let result = runner::verify_with_z3(&smt);
         assert!(result.is_ok(), "Integer division logic failed.");
     }

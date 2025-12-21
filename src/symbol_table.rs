@@ -94,7 +94,7 @@ impl Resolver {
                 target_id,
                 value,
             } => {
-                // 1. Resolve the RHS first (e.g., y = x + 1)
+                // Resolve the RHS first (e.g., y = x + 1)
                 self.resolve_expr(value).map_err(|msg| Diagnostic {
                     error: CheckError::UndefinedVariable {
                         var: msg.to_string(),
@@ -102,7 +102,7 @@ impl Resolver {
                     span: stmt.span,
                 })?;
 
-                // 2. Resolve the LHS
+                // Resolve the LHS
                 // If it's already in scope, use that ID. If not, define it.
                 if let Some(id) = self.resolve(target) {
                     *target_id = Some(id);
@@ -110,6 +110,13 @@ impl Resolver {
                     let new_id = self.define(target.clone());
                     *target_id = Some(new_id);
                 }
+            }
+            Stmt::Let { name, value, id } => {
+                self.resolve_expr(value)?;
+
+                let new_id = self.define(name.clone());
+
+                *id = Some(new_id);
             }
             Stmt::If {
                 cond,
@@ -176,6 +183,17 @@ impl Resolver {
                 if let Some(id) = self.resolve(name) {
                     *id_slot = Some(id);
                     Ok(())
+                } else if name.ends_with("_length") {
+                    let base_name = &name[..name.len() - 7];
+                    if let Some(id) = self.resolve(base_name) {
+                        *id_slot = Some(id);
+                        Ok(())
+                    } else {
+                        Err(Diagnostic {
+                            error: CheckError::UndefinedVariable { var: name.clone() },
+                            span: expr.span,
+                        })
+                    }
                 } else {
                     Err(Diagnostic {
                         error: CheckError::UndefinedVariable { var: name.clone() },

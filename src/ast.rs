@@ -16,6 +16,7 @@ pub enum Op {
     Div,
     Eq,
     Neq,
+    And,
     Gt,
     Lt,
     Gte,
@@ -35,6 +36,11 @@ pub enum Expr {
 
 #[derive(Debug, Clone)]
 pub enum Stmt {
+    Let {
+        name: String,
+        value: SExpr,
+        id: Option<NodeId>,
+    },
     Assign {
         target: String,
         target_id: Option<NodeId>, // Filled by the resolver
@@ -62,6 +68,7 @@ pub enum Stmt {
 pub enum Type {
     Int,
     Nat,
+    Bool,
     Array(Box<Type>),
 }
 
@@ -70,6 +77,7 @@ impl Display for Type {
         match self {
             Type::Int => write!(f, "int"),
             Type::Nat => write!(f, "nat"),
+            Type::Bool => write!(f, "bool"),
             Type::Array(inner) => write!(f, "[{}]", inner),
         }
     }

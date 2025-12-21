@@ -11,6 +11,41 @@ pub enum CheckError {
     UndefinedArray { var: String },
     ArrayOutOfBound { var: String },
     AssignToMoved { var: String },
+    TypeError { var: String },
+    GenericError(String),
+}
+
+impl fmt::Display for CheckError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CheckError::TypeMismatch { expected, found } => {
+                write!(
+                    f,
+                    "mismatched types\nexpected: {:?}\n   found: {:?}",
+                    expected, found
+                )
+            }
+            CheckError::InvalidIndex { base_ty } => {
+                write!(f, "cannot index into a value of type `{:?}`", base_ty)
+            }
+            CheckError::TypeError { var } => {
+                write!(f, "{}", var) // Here 'var' is actually the custom message
+            }
+            CheckError::UndefinedVariable { var } => {
+                write!(f, "cannot find value `{}` in this scope", var)
+            }
+            CheckError::UseAfterMove { var } => {
+                write!(f, "use of moved value: '{}'", var)
+            }
+            CheckError::UndefinedArray { var } => write!(f, "array `{}` is undefined", var),
+            CheckError::ArrayOutOfBound { var } => {
+                write!(f, "index out of bounds for array `{}`", var)
+            }
+            CheckError::GenericError(msg) => write!(f, "{}", msg),
+            // ... other variants
+            _ => write!(f, "{:?}", self),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -73,13 +108,16 @@ impl<T> Spanned<T> {
 
 impl Diagnostic {
     pub fn emit(&self, source: &str) {
+        let line_num = source[..self.span.start].lines().count();
         let snippet = &source[self.span.start..self.span.end];
-        println!("--------------------------------------------------");
-        println!("{}", self);
+
+        println!("error: {}", self.error); // Use the error's display
+        println!("  --> line {}", line_num);
         println!("   |");
-        println!("   |  {}", snippet);
+        println!("{:3} |  {}", line_num, snippet);
+        // Calculate underlining
+        println!("   |  {}", "^".repeat(self.span.len()));
         println!("   |");
-        println!("--------------------------------------------------");
     }
 }
 
@@ -122,6 +160,12 @@ impl fmt::Display for Diagnostic {
             }
             CheckError::ArrayOutOfBound { var } => {
                 write!(f, "Array '{}' out of bound\n at {:?}", var, self.span)
+            }
+            CheckError::TypeError { var } => {
+                write!(f, "Type error: {}\n at {:?}", var, self.span)
+            }
+            CheckError::GenericError(var) => {
+                write!(f, "{}", var)
             }
         }
     }
