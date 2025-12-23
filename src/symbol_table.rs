@@ -103,12 +103,18 @@ impl Resolver {
                 })?;
 
                 // Resolve the LHS
-                // If it's already in scope, use that ID. If not, define it.
+                // If it's already in scope, use that ID
+                // Make assignment require prior definition
+                // Must declare the variable with `let`
                 if let Some(id) = self.resolve(target) {
                     *target_id = Some(id);
                 } else {
-                    let new_id = self.define(target.clone());
-                    *target_id = Some(new_id);
+                    return Err(Diagnostic {
+                        error: CheckError::UndefinedVariable {
+                            var: target.clone(),
+                        },
+                        span: stmt.span,
+                    });
                 }
             }
             Stmt::Let { name, value, id } => {
@@ -304,5 +310,106 @@ impl Resolver {
         }
 
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ast::{Expr, SExpr, Type};
+    use crate::errors::Span;
+
+    fn dummy_span() -> Span {
+        Span { start: 0, end: 0 }
+    }
+
+    #[test]
+    fn test_basic_resolution_and_shadowing() {
+        let mut resolver = Resolver::new();
+        let mut tcx = TyCtx::new();
+
+        // 1. Define 'x' in global/outer scope
+        let id_x_outer = resolver.define("x".to_string());
+        tcx.define_local(id_x_outer, "x", Type::Int);
+
+        // 2. Enter a new scope and shadow 'x'
+        resolver.enter_scope();
+        let id_x_inner = resolver.define("x".to_string());
+        tcx.define_local(id_x_inner, "x", Type::Bool);
+
+        // Verify that in the current scope, 'x' resolves to the inner ID
+        let resolved_id = resolver.resolve("x").expect("Should find x");
+        assert_eq!(resolved_id, id_x_inner);
+        assert_eq!(tcx.get_type(&resolved_id), Some(&Type::Bool));
+
+        // 3. Exit scope and verify 'x' resolves to the outer ID again
+        resolver.exit_scope();
+        let resolved_id_back = resolver.resolve("x").expect("Should find x");
+        assert_eq!(resolved_id_back, id_x_outer);
+        assert_eq!(tcx.get_type(&resolved_id_back), Some(&Type::Int));
+    }
+
+    #[test]
+    fn test_resolve_expr_variable() {
+        let mut resolver = Resolver::new();
+        let var_name = "my_var".to_string();
+        let expected_id = resolver.define(var_name.clone());
+
+        // Create an Expr::Var with an empty NodeId slot
+        let mut expr = SExpr {
+            node: Expr::Var(var_name.clone(), None),
+            span: dummy_span(),
+        };
+
+        // Run resolution
+        resolver.resolve_expr(&mut expr).expect("Resolution failed");
+
+        // Check if the ID was correctly injected into the AST node
+        if let Expr::Var(_, Some(actual_id)) = expr.node {
+            assert_eq!(actual_id, expected_id);
+        } else {
+            panic!("NodeId was not populated in Expr::Var");
+        }
+    }
+
+    #[test]
+    fn test_undefined_variable_error() {
+        let mut resolver = Resolver::new();
+        let mut expr = SExpr {
+            node: Expr::Var("ghost".to_string(), None),
+            span: dummy_span(),
+        };
+
+        let result = resolver.resolve_expr(&mut expr);
+        assert!(
+            result.is_err(),
+            "Should return error for undefined variable"
+        );
+    }
+
+    #[test]
+    fn test_array_length_magic_resolution() {
+        let mut resolver = Resolver::new();
+        let arr_name = "my_array".to_string();
+        let arr_id = resolver.define(arr_name);
+
+        // Try to resolve "my_array_length"
+        let mut expr = SExpr {
+            node: Expr::Var("my_array_length".to_string(), None),
+            span: dummy_span(),
+        };
+
+        resolver
+            .resolve_expr(&mut expr)
+            .expect("Should resolve _length suffix");
+
+        if let Expr::Var(_, Some(actual_id)) = expr.node {
+            assert_eq!(
+                actual_id, arr_id,
+                "Array length should map to the array's NodeId"
+            );
+        } else {
+            panic!("NodeId was not populated for array length");
+        }
     }
 }
