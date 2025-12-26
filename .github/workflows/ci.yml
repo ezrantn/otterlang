@@ -19,10 +19,6 @@ jobs:
         ${{ matrix.os == 'ubuntu-latest' && '/usr/include/z3.h' || 
             (matrix.os == 'macos-latest' && '/opt/homebrew/include/z3.h' || 
             'C:/tools/z3/include/z3.h') }}
-      Z3_LIBRARY_PATH_OVERRIDE: >-
-        ${{ matrix.os == 'macos-latest' && '/opt/homebrew/lib' || 
-            (matrix.os == 'windows-latest' && 'C:/tools/z3/bin' || 
-            '') }}
 
     steps:
       - name: Checkout code
@@ -51,7 +47,23 @@ jobs:
         run: cargo fmt -- --check
 
       - name: Run Clippy
-        run: cargo clippy -- -D warnings
+        shell: bash
+        run: |
+          # Set library path hanya untuk macOS dan Windows
+          if [[ "${{ matrix.os }}" == "macos-latest" ]]; then
+            export Z3_LIBRARY_PATH_OVERRIDE="/opt/homebrew/lib"
+          elif [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+            export Z3_LIBRARY_PATH_OVERRIDE="C:/tools/z3/bin"
+          fi
+          cargo clippy -- -D warnings
 
       - name: Run tests
-        run: cargo test
+        shell: bash
+        run: |
+          # Set library path hanya untuk macOS dan Windows
+          if [[ "${{ matrix.os }}" == "macos-latest" ]]; then
+            export Z3_LIBRARY_PATH_OVERRIDE="/opt/homebrew/lib"
+          elif [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+            export Z3_LIBRARY_PATH_OVERRIDE="C:/tools/z3/bin"
+          fi
+          cargo test
