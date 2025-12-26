@@ -1,0 +1,35 @@
+name: Release Katon
+
+on:
+  push:
+    tags: ["v*"]
+jobs:
+  release:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact_name: katon-linux
+          - os: macos-latest
+            artifact_name: katon-macos
+          - os: windows-latest
+            artifact_name: katon-windows.exe
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build deps
+        run: |
+          if [ "${{ matrix.os }}" == "ubuntu-latest" ]; then sudo apt-get install -y cmake g++; fi
+          if [ "${{ matrix.os }}" == "macos-latest" ]; then brew install cmake; fi
+
+      - name: Build Release
+        run: cargo build --release --features bundled
+
+      - name: Upload Artifacts
+        uses: softprops/action-gh-release@v1
+        with:
+          files: target/release/${{ matrix.artifact_name }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}s
