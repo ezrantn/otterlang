@@ -1,6 +1,7 @@
-use crate::ast::{Expr, FnDecl, Op, SExpr, SStmt, Stmt, Type};
-use crate::errors::{CheckError, Diagnostic, Span};
 use crate::symbol_table::TyCtx;
+use katon_core::Span;
+use katon_core::ast::{Expr, FnDecl, Op, SExpr, SStmt, Stmt, Type};
+use katon_core::errors::{CheckError, Diagnostic};
 
 pub struct TypeChecker<'a> {
     tcx: &'a mut TyCtx,
@@ -368,7 +369,7 @@ impl<'a> TypeChecker<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::*;
+    use katon_core::ast::*;
 
     fn checker() -> TypeChecker<'static> {
         let tcx = Box::leak(Box::new(TyCtx::default()));

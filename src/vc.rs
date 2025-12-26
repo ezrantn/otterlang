@@ -1,7 +1,5 @@
-use crate::{
-    ast::{Expr, FnDecl, NodeId, Op, SExpr, SStmt, Stmt, Type},
-    symbol_table::TyCtx,
-};
+use crate::symbol_table::TyCtx;
+use katon_core::ast::{Expr, FnDecl, NodeId, Op, SExpr, SStmt, Stmt, Type};
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
@@ -442,8 +440,8 @@ pub fn compile(func: &FnDecl, tcx: &TyCtx) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::errors::{Span, Spanned};
     use crate::runner::verify_with_z3;
+    use katon_core::span::{Span, Spanned};
 
     fn var(name: &str, id: u32) -> SExpr {
         Spanned::dummy(Expr::Var(name.to_string(), Some(NodeId(id))))

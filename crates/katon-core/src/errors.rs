@@ -1,5 +1,6 @@
 use std::fmt;
 
+use crate::Span;
 use crate::ast::Type;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -111,58 +112,6 @@ pub struct Diagnostic {
     pub span: Span,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Span {
-    pub start: usize,
-    pub end: usize,
-}
-
-impl Span {
-    pub fn new(start: usize, end: usize) -> Self {
-        debug_assert!(start <= end);
-        Span { start, end }
-    }
-
-    /// Dummy span for tests, desugaring, or generated code
-    pub fn dummy() -> Self {
-        Span { start: 0, end: 0 }
-    }
-
-    /// Length in bytes
-    pub fn len(&self) -> usize {
-        self.end - self.start
-    }
-
-    // 0..0 is both empty and dummy
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    // 5..5 is empty but not dummy
-    pub fn is_dummy(&self) -> bool {
-        self.start == 0 && self.end == 0
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Spanned<T> {
-    pub node: T,
-    pub span: Span,
-}
-
-impl<T> Spanned<T> {
-    pub fn new(node: T, span: Span) -> Self {
-        Self { node, span }
-    }
-
-    pub fn dummy(node: T) -> Self {
-        Self {
-            node,
-            span: Span::dummy(),
-        }
-    }
-}
-
 impl Diagnostic {
     pub fn emit(&self, source: &str) {
         let line_num = source[..self.span.start].lines().count() + 1;
@@ -235,6 +184,7 @@ impl fmt::Display for Diagnostic {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Spanned;
 
     #[test]
     fn test_verification_error_is_detected() {

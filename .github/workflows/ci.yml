@@ -69,5 +69,5 @@ jobs:
             export Z3_LIBRARY_PATH_OVERRIDE=$(brew --prefix z3)/lib
           fi
 
-          cargo clippy -- -D warnings
-          cargo test
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo test --workspace --all-features

@@ -1,0 +1,8 @@
+[package]
+name = "katon-lsp"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+katon-core = { path = "../katon-core" }
+katon-linter = { path = "../katon-linter" }

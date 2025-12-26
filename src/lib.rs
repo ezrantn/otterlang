@@ -1,6 +1,4 @@
-pub mod ast;
 pub mod check;
-pub mod errors;
 pub mod runner;
 pub mod symbol_table;
 pub mod typecheck;
@@ -11,13 +9,14 @@ lalrpop_mod!(pub katon);
 
 #[cfg(test)]
 mod tests {
-    use super::ast::{Expr, FnDecl, NodeId, Op, SExpr, Stmt, Type};
     use super::check::BorrowChecker;
-    use super::errors::{CheckError, Span, Spanned};
     use super::katon;
     use super::runner;
     use super::symbol_table::{Resolver, TyCtx};
     use super::typecheck::TypeChecker;
+    use katon_core::ast::{Expr, FnDecl, NodeId, Op, SExpr, Stmt, Type};
+    use katon_core::errors::CheckError;
+    use katon_core::span::{Span, Spanned};
 
     fn var(name: &str, id: Option<u32>) -> SExpr {
         Spanned::dummy(Expr::Var(name.to_string(), id.map(NodeId)))

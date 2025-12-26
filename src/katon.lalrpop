@@ -1,6 +1,6 @@
 use std::str::FromStr;
-use crate::ast::{Expr, FnDecl, Op, Stmt, Type, NodeId};
-use crate::errors::{Spanned, Span};
+use katon_core::ast::{Expr, FnDecl, Op, Stmt, Type, NodeId};
+use katon_core::span::{Spanned, Span};
 
 grammar;
 

@@ -1,9 +1,7 @@
 // Implementation of affine types
-use crate::{
-    ast::{Expr, FnDecl, NodeId, Op, SExpr, SStmt, Stmt, Type},
-    errors::{CheckError, Diagnostic},
-    symbol_table::TyCtx,
-};
+use crate::symbol_table::TyCtx;
+use katon_core::ast::{Expr, FnDecl, NodeId, Op, SExpr, SStmt, Stmt, Type};
+use katon_core::errors::{CheckError, Diagnostic};
 use std::collections::HashMap;
 
 pub struct BorrowChecker {
@@ -313,10 +311,8 @@ impl BorrowChecker {
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        ast::{Op, Type},
-        errors::{Span, Spanned},
-    };
+    use katon_core::ast::{Op, Type};
+    use katon_core::span::{Span, Spanned};
 
     use super::*;
 

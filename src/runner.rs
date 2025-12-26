@@ -1,7 +1,7 @@
-use crate::ast::FnDecl;
-use crate::errors::{CheckError, VerificationError};
 use crate::symbol_table::TyCtx;
 use crate::vc::compile;
+use katon_core::ast::FnDecl;
+use katon_core::errors::{CheckError, VerificationError};
 use z3::*;
 
 pub fn verify_with_z3(func: &FnDecl, tcx: &TyCtx) -> Result<(), CheckError> {

@@ -4,12 +4,18 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+katon-core = { path = "crates/katon-core" }
 lalrpop-util = { version = "0.22.2", features = ["lexer"] }
 z3 = "0.19.6"
 
-[features]
-default = []
-static = ["z3/bundled"]
-
 [build-dependencies]
 lalrpop = "0.22.2"
+
+[workspace]
+resolver = "2"
+members = [
+    "crates/katon-core",
+    "crates/katon-linter",
+    "crates/katon-lsp",
+    "crates/katon-cli",
+]

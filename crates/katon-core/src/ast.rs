@@ -1,10 +1,9 @@
-use crate::errors::{Span, Spanned};
+use crate::span::{Span, Spanned};
 use std::fmt::{Display, Formatter, Result};
 
 pub type SExpr = Spanned<Expr>;
 pub type SStmt = Spanned<Stmt>;
 
-// A unique identifier for every definition/use in the program
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct NodeId(pub u32);
 
@@ -28,7 +27,7 @@ pub enum Op {
 pub enum Expr {
     IntLit(i64),
     BoolLit(bool),
-    Var(String, Option<NodeId>), // Var now stores its resolved ID after the name resolution pass
+    Var(String, Option<NodeId>),
     Old(String, Option<NodeId>),
     Binary(Box<SExpr>, Op, Box<SExpr>),
     Cast(Type, Box<SExpr>),
@@ -45,7 +44,7 @@ pub enum Stmt {
     },
     Assign {
         target: String,
-        target_id: Option<NodeId>, // Filled by the resolver
+        target_id: Option<NodeId>,
         value: SExpr,
     },
     If {
@@ -55,7 +54,7 @@ pub enum Stmt {
     },
     While {
         cond: SExpr,
-        invariant: SExpr, // The user MUST use invariant for now
+        invariant: SExpr,
         body: Vec<SStmt>,
     },
     ArrayUpdate {

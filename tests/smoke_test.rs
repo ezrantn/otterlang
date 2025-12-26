@@ -1,13 +1,14 @@
 #[cfg(test)]
 mod tests {
-    use katon::ast::FnDecl;
     use katon::check::BorrowChecker;
-    use katon::errors::{Diagnostic, Spanned};
     use katon::katon::FnDeclParser;
     use katon::runner::verify_with_z3;
     use katon::symbol_table::{Resolver, TyCtx};
     use katon::typecheck::TypeChecker;
     use katon::vc::compile;
+    use katon_core::ast::FnDecl;
+    use katon_core::errors::Diagnostic;
+    use katon_core::span::Spanned;
     use std::fs;
     use std::path::Path;
 

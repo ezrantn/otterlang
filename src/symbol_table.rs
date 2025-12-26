@@ -1,9 +1,7 @@
 use std::collections::HashMap;
 
-use crate::{
-    ast::{Expr, FnDecl, NodeId, SExpr, SStmt, Stmt, Type},
-    errors::{CheckError, Diagnostic},
-};
+use katon_core::ast::{Expr, FnDecl, NodeId, SExpr, SStmt, Stmt, Type};
+use katon_core::errors::{CheckError, Diagnostic};
 
 // Symbol table implementation to make the assignment know
 // what data type is passing
@@ -324,8 +322,8 @@ impl Resolver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{Expr, SExpr, Type};
-    use crate::errors::Span;
+    use katon_core::ast::{Expr, SExpr, Type};
+    use katon_core::span::Span;
 
     fn dummy_span() -> Span {
         Span { start: 0, end: 0 }
