@@ -6,6 +6,8 @@ use z3::*;
 
 pub fn verify_with_z3(func: &FnDecl, tcx: &TyCtx) -> Result<(), CheckError> {
     let solver = Solver::new();
+    let mut cfg = Config::new();
+    cfg.set_timeout_msec(10000); // 10 seconds
 
     let vcs = compile(func, tcx);
 

@@ -196,11 +196,12 @@ mod tests {
         // }
 
         let mut tcx = TyCtx::new();
+        let mut resolver = Resolver::new();
 
         let x_id = NodeId(0);
         tcx.define_local(x_id, "x", Type::Nat);
 
-        let func = FnDecl {
+        let mut func = FnDecl {
             name: "Vacuous".to_string(),
             span: Span::dummy(),
             param_names: vec!["x".to_string()],
@@ -217,6 +218,7 @@ mod tests {
             ensures: vec![bin(var("x", Some(0)), Op::Eq, int(0))],
         };
 
+        resolver.resolve_function(&mut func, &mut tcx).unwrap();
         let result = runner::verify_with_z3(&func, &tcx);
         assert!(
             result.is_ok(),
