@@ -345,10 +345,10 @@ impl BorrowChecker {
                 }
 
                 // IMPORTANT: do NOT move base
-                if let Expr::Var(_, Some(id)) = &base.node {
-                    if let Some((alive, ty)) = self.scope.get(id).cloned() {
-                        self.scope.insert(*id, (alive, ty));
-                    }
+                if let Expr::Var(_, Some(id)) = &base.node
+                    && let Some((alive, ty)) = self.scope.get(id).cloned()
+                {
+                    self.scope.insert(*id, (alive, ty));
                 }
 
                 Ok(())
