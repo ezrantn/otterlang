@@ -12,7 +12,7 @@ mod tests {
     use std::fs;
     use std::path::Path;
 
-    fn run_smoke_test(file_path: &Path) -> Result<(), String> {
+    fn _run_smoke_test(file_path: &Path) -> Result<(), String> {
         let source =
             fs::read_to_string(file_path).map_err(|e| format!("Failed to read the file {}", e))?;
 
