@@ -688,4 +688,90 @@ mod tests {
 
         assert!(tc.check_expr(&expr).is_err());
     }
+
+    #[test]
+    fn test_assign_not_in_modifies_fails() {
+        let mut tcx = TyCtx::new();
+
+        // Create checker with 'x' in modifies, but 'y' is NOT
+        let mut tc = TypeChecker::new(&mut tcx, vec!["x".to_string()]);
+
+        tc.tcx.node_types.insert(NodeId(1), Type::Int);
+
+        let stmt = SStmt {
+            node: Stmt::Assign {
+                target: "y".to_string(),
+                target_id: Some(NodeId(1)),
+                value: SExpr {
+                    node: Expr::IntLit(10),
+                    span: Span::dummy(),
+                },
+            },
+            span: Span::dummy(),
+        };
+
+        let err = tc.check_stmt(&stmt).unwrap_err();
+        // Should trigger the ensure_modifiable check
+        match err.error {
+            CheckError::TypeError { msg } => {
+                assert!(msg.contains("is not marked as modifiable"));
+            }
+            _ => panic!("Expected a TypeError for modifiability check"),
+        }
+    }
+
+    #[test]
+    fn test_assign_in_modifies_succeeds() {
+        let mut tcx = TyCtx::new();
+
+        // Create checker with 'x' explicitly allowed
+        let mut tc = TypeChecker::new(&mut tcx, vec!["x".to_string()]);
+
+        tc.tcx.node_types.insert(NodeId(1), Type::Int);
+
+        let stmt = SStmt {
+            node: Stmt::Assign {
+                target: "x".to_string(),
+                target_id: Some(NodeId(1)),
+                value: SExpr {
+                    node: Expr::IntLit(10),
+                    span: Span::dummy(),
+                },
+            },
+            span: Span::dummy(),
+        };
+
+        assert!(tc.check_stmt(&stmt).is_ok());
+    }
+
+    #[test]
+    fn test_array_update_modifies_enforcement() {
+        let mut tcx = TyCtx::new();
+
+        // Empty modifies list
+        let mut tc = TypeChecker::new(&mut tcx, vec![]);
+
+        tc.tcx
+            .node_types
+            .insert(NodeId(1), Type::Array(5, Box::new(Type::Int)));
+
+        let stmt = SStmt {
+            node: Stmt::ArrayUpdate {
+                target: "a".to_string(),
+                target_id: Some(NodeId(1)),
+                index: SExpr {
+                    node: Expr::IntLit(0),
+                    span: Span::dummy(),
+                },
+                value: SExpr {
+                    node: Expr::IntLit(1),
+                    span: Span::dummy(),
+                },
+            },
+            span: Span::dummy(),
+        };
+
+        let result = tc.check_stmt(&stmt);
+        assert!(result.is_err());
+    }
 }

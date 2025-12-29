@@ -534,6 +534,10 @@ mod tests {
         Spanned::dummy(Expr::Old(name.to_string(), Some(NodeId(id))))
     }
 
+    fn bool_lit(n: bool) -> SExpr {
+        Spanned::dummy(Expr::BoolLit(n))
+    }
+
     fn int(n: i64) -> SExpr {
         Spanned::dummy(Expr::IntLit(n))
     }
@@ -836,5 +840,106 @@ mod tests {
 
         // Base array name must appear (x_1 or similar)
         assert!(vc.contains("x_"));
+    }
+
+    #[test]
+    fn test_compile_modifies_frame_constraint() {
+        let mut tcx = TyCtx::new();
+
+        // Setup: x and y are parameters.
+        // We will modify both in the body, but only put 'x' in the modifies clause.
+        let x_id = NodeId(0);
+        let y_id = NodeId(1);
+
+        tcx.define_local(x_id, "x", Type::Int);
+        tcx.define_local(y_id, "y", Type::Int);
+
+        let func = FnDecl {
+            name: "test_frame".to_string(),
+            span: Span::dummy(),
+            params: vec![(x_id, Type::Int), (y_id, Type::Int)],
+            param_names: vec!["x".to_string(), "y".to_string()],
+            // Only x is allowed to change
+            modifies: vec!["x".to_string()],
+            requires: vec![],
+            body: vec![
+                // x = x + 1
+                Spanned::dummy(Stmt::Assign {
+                    target: "x".to_string(),
+                    target_id: Some(x_id),
+                    value: bin(var("x", 0), Op::Add, int(1)),
+                }),
+                // y = y + 1 (The VC Gen should force y_2 == y_1 later)
+                Spanned::dummy(Stmt::Assign {
+                    target: "y".to_string(),
+                    target_id: Some(y_id),
+                    value: bin(var("y", 1), Op::Add, int(1)),
+                }),
+            ],
+            ensures: vec![
+                // Dummy post-condition to trigger VC generation
+                bin(var("x", 0), Op::Gt, int(0)),
+            ],
+        };
+
+        let vcs = compile(&func, &tcx);
+        let smt_output = vcs.join("\n");
+
+        // 1. Check SSA versions were created
+        // Params start at x_1 and y_1. Assignments create x_2 and y_2.
+        assert!(smt_output.contains("(declare-const x_2 Int)"));
+        assert!(smt_output.contains("(declare-const y_2 Int)"));
+
+        // 2. Check Frame Constraints
+        // Since 'x' IS in modifies, there should NOT be an assertion forcing x_2 == x_1.
+        // (Note: we check the inverse—that such a specific constraint is absent)
+        assert!(
+            !smt_output.contains("(assert (= x_2 x_1))"),
+            "x is modified, should not be constrained to original value"
+        );
+
+        // Since 'y' IS NOT in modifies, VC gen must assert y_final == y_initial
+        // In this specific body, the final version is y_2.
+        assert!(
+            smt_output.contains("(assert (= y_2 y_1))"),
+            "y is not in modifies, frame constraint must enforce y_2 == y_1"
+        );
+    }
+
+    #[test]
+    fn test_compile_modifies_with_while_loop() {
+        let mut tcx = TyCtx::new();
+        let x_id = NodeId(0);
+        tcx.define_local(x_id, "x", Type::Int);
+
+        let func = FnDecl {
+            name: "loop_frame".to_string(),
+            span: Span::dummy(),
+            params: vec![(x_id, Type::Int)],
+            param_names: vec!["x".to_string()],
+            modifies: vec![], // x is NOT in modifies
+            requires: vec![],
+            body: vec![Spanned::dummy(Stmt::While {
+                cond: bin(var("x", 0), Op::Lt, int(10)),
+                invariant: bool_lit(true),
+                body: vec![Spanned::dummy(Stmt::Assign {
+                    target: "x".to_string(),
+                    target_id: Some(x_id),
+                    value: bin(var("x", 0), Op::Add, int(1)),
+                })],
+            })],
+            ensures: vec![bool_lit(true)],
+        };
+
+        let vcs = compile(&func, &tcx);
+        let smt_output = vcs.join("\n");
+
+        // Because a loop 'havocs' variables, x will get a new version (e.g., x_2).
+        // Because x is not in modifies, the frame constraint (assert (= x_n x_1))
+        // must appear at the end to ensure the loop didn't violate the contract.
+        assert!(
+            smt_output.contains("(assert (= x_2 x_1))")
+                || smt_output.contains("(assert (= x_3 x_1))")
+        );
     }
 }

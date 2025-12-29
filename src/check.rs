@@ -434,7 +434,7 @@ impl BorrowChecker {
 
 #[cfg(test)]
 mod tests {
-    use katon_core::ast::{Op, Type};
+    use katon_core::ast::{Expr, Op, Type};
     use katon_core::span::{Span, Spanned};
 
     use crate::typecheck::TypeChecker;
@@ -976,5 +976,126 @@ mod tests {
 
         assert!(bc.check_stmt(&stmt, &mut tcx).is_ok());
         assert!(!bc.scope.get(&x).unwrap().0);
+    }
+
+    #[test]
+    fn test_borrow_checker_modifies_enforcement() {
+        let mut bc = BorrowChecker::new();
+        let mut tcx = TyCtx::new();
+
+        // Setup: x and y are Ints.
+        // x will be in modifies, y will not.
+        let x_id = NodeId(0);
+        let y_id = NodeId(1);
+        tcx.define_local(x_id, "x", Type::Int);
+        tcx.define_local(y_id, "y", Type::Int);
+
+        let func = FnDecl {
+            name: "test_modifies".to_string(),
+            span: Span::dummy(),
+            param_names: vec!["x".to_string(), "y".to_string()],
+            params: vec![(x_id, Type::Int), (y_id, Type::Int)],
+            modifies: vec!["x".to_string()], // ONLY x can be modified
+            requires: vec![],
+            ensures: vec![],
+            body: vec![
+                // 1. Success: x = 10 (x is in modifies)
+                Spanned::dummy(Stmt::Assign {
+                    target: "x".to_string(),
+                    target_id: Some(x_id),
+                    value: int(10),
+                }),
+                // 2. Failure: y = 20 (y is NOT in modifies)
+                Spanned::dummy(Stmt::Assign {
+                    target: "y".to_string(),
+                    target_id: Some(y_id),
+                    value: int(20),
+                }),
+            ],
+        };
+
+        let result = bc.check_fn(&func, &mut tcx);
+
+        assert!(
+            result.is_err(),
+            "Should fail because 'y' is not in the modifies clause"
+        );
+        if let Err(diag) = result {
+            match diag.error {
+                CheckError::TypeError { msg } => {
+                    assert!(msg.contains("Variable 'y' cannot be reassigned"));
+                }
+                _ => panic!("Expected a TypeError regarding the modifies clause"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_borrow_checker_array_update_modifies() {
+        let mut bc = BorrowChecker::new();
+        let mut tcx = TyCtx::new();
+
+        let arr_id = NodeId(0);
+        let arr_ty = Type::Array(5, Box::new(Type::Int));
+        tcx.define_local(arr_id, "my_arr", arr_ty.clone());
+
+        let func = FnDecl {
+            name: "test_array".to_string(),
+            span: Span::dummy(),
+            param_names: vec!["my_arr".to_string()],
+            params: vec![(arr_id, arr_ty)],
+            modifies: vec![], // NOT ALLOWED TO MODIFY ANYTHING
+            requires: vec![],
+            ensures: vec![],
+            body: vec![
+                // Failure: my_arr[0] = 1 (my_arr not in modifies)
+                Spanned::dummy(Stmt::ArrayUpdate {
+                    target: "my_arr".to_string(),
+                    target_id: Some(arr_id),
+                    index: int(0),
+                    value: int(1),
+                }),
+            ],
+        };
+
+        let result = bc.check_fn(&func, &mut tcx);
+        assert!(
+            result.is_err(),
+            "Array update must respect the modifies clause"
+        );
+    }
+
+    #[test]
+    fn test_let_does_not_require_modifies() {
+        let mut bc = BorrowChecker::new();
+        let mut tcx = TyCtx::new();
+
+        // A 'let' statement creates a NEW local variable.
+        // It should NOT require being in the 'modifies' clause
+        // because it isn't mutating an existing parameter/global.
+
+        let func = FnDecl {
+            name: "test_let".to_string(),
+            span: Span::dummy(),
+            param_names: vec![],
+            params: vec![],
+            modifies: vec![], // Empty
+            requires: vec![],
+            ensures: vec![],
+            body: vec![Spanned::dummy(Stmt::Let {
+                name: "temp".to_string(),
+                ty: Some(Type::Int),
+                id: Some(NodeId(0)),
+                value: Some(int(5)),
+            })],
+        };
+
+        tcx.node_types.insert(NodeId(0), Type::Int);
+
+        let result = bc.check_fn(&func, &mut tcx);
+        assert!(
+            result.is_ok(),
+            "let bindings should not be restricted by the modifies clause"
+        );
     }
 }

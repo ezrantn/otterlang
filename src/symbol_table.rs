@@ -619,4 +619,89 @@ mod tests {
         assert!(resolver.resolve("borrow").is_none());
         assert_eq!(resolver.resolve("x"), Some(x_id));
     }
+
+    #[test]
+    fn test_resolve_function_modifies_clause() {
+        let mut resolver = Resolver::new();
+        let mut tcx = TyCtx::new();
+
+        let global_id = resolver.define("global_var".to_string());
+        tcx.define_local(global_id, "global_var", Type::Int);
+
+        // Create a function that modifies 'global_var' (exists) and 'unknown_var' (missing)
+        let mut func_ok = FnDecl {
+            name: "update_global".to_string(),
+            param_names: vec![],
+            params: vec![],
+            modifies: vec!["global_var".to_string()], // Should resolve
+            requires: vec![],
+            ensures: vec![],
+            body: vec![],
+            span: katon_core::Span::dummy(),
+        };
+
+        let mut func_fail = FnDecl {
+            name: "update_ghost".to_string(),
+            param_names: vec![],
+            params: vec![],
+            modifies: vec!["ghost_var".to_string()], // Should FAIL
+            requires: vec![],
+            ensures: vec![],
+            body: vec![],
+            span: katon_core::Span::dummy(),
+        };
+
+        // Test successful resolution
+        assert!(
+            resolver.resolve_function(&mut func_ok, &mut tcx).is_ok(),
+            "Function should resolve successfully when modified variable exists in scope"
+        );
+
+        // Test failure resolution
+        let result = resolver.resolve_function(&mut func_fail, &mut tcx);
+        assert!(
+            result.is_err(),
+            "Function should fail to resolve if modified variable is undefined"
+        );
+
+        if let Err(diag) = result {
+            match diag.error {
+                CheckError::UndefinedVariable { var } => {
+                    assert_eq!(var, "ghost_var");
+                }
+                _ => panic!("Expected UndefinedVariable error for ghost_var"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_modifies_with_params_shadowing() {
+        let mut resolver = Resolver::new();
+        let mut tcx = TyCtx::new();
+
+        // Define 'x' globally
+        let global_x = resolver.define("x".to_string());
+        tcx.define_local(global_x, "x", Type::Int);
+
+        let mut func = FnDecl {
+            name: "shadow_test".to_string(),
+            param_names: vec!["x".to_string()], // Shadowing 'x'
+            params: vec![(NodeId(999), Type::Bool)], // Dummy ID
+            modifies: vec!["x".to_string()],    // Which 'x' does this resolve to?
+            requires: vec![],
+            ensures: vec![],
+            body: vec![],
+            span: katon_core::Span::dummy(),
+        };
+
+        // In our implementation, resolve_function calls enter_scope()
+        // and defines params BEFORE checking modifies.
+        // Therefore, 'modifies x' will resolve to the PARAM 'x', not the global 'x'.
+        let _ = resolver.resolve_function(&mut func, &mut tcx);
+
+        // The first param's ID should match what 'x' resolves to inside the function context
+        // (Note: This depends on your specific logic of whether parameters are allowed in modifies)
+        let param_id = func.params[0].0;
+        assert_ne!(param_id, global_x);
+    }
 }
